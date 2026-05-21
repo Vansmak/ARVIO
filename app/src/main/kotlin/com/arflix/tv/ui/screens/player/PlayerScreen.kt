@@ -222,6 +222,9 @@ fun PlayerScreen(
                     Build.MODEL.contains("Box R", ignoreCase = true)
                 )
     }
+    val allowExceedCodecCapabilities = remember(preferExtensionDecoder) {
+        !preferExtensionDecoder
+    }
 
     // Keep playback in landscape while the player is visible, regardless of the
     // device's auto-rotate lock. Restore the app's prior orientation afterward.
@@ -596,11 +599,12 @@ fun PlayerScreen(
                         .setAllowAudioMixedMimeTypeAdaptiveness(true)
                         // Disable HDR requirement - play HDR as SDR if needed
                         .setForceLowestBitrate(false)
-                        // Stay inside reported device capabilities. Forcing unsupported profiles
-                        // can hang vendor MediaCodec allocation on Android TV boxes.
-                        .setExceedVideoConstraintsIfNecessary(false)
-                        .setExceedAudioConstraintsIfNecessary(false)
-                        .setExceedRendererCapabilitiesIfNecessary(false)
+                        // Keep strict caps only for the Amlogic/SEI TV decoder workaround.
+                        // Phones/tablets and other devices need the older permissive path so
+                        // home-server files with DTS/TrueHD/Atmos/EAC3 tracks still get audio.
+                        .setExceedVideoConstraintsIfNecessary(allowExceedCodecCapabilities)
+                        .setExceedAudioConstraintsIfNecessary(allowExceedCodecCapabilities)
+                        .setExceedRendererCapabilitiesIfNecessary(allowExceedCodecCapabilities)
                         .build()
                 }
             )
@@ -699,8 +703,8 @@ fun PlayerScreen(
                                 selector?.let {
                                     it.parameters = it.buildUponParameters()
                                         .setPreferredVideoMimeType(preferredMime)
-                                        .setExceedRendererCapabilitiesIfNecessary(false)
-                                        .setExceedVideoConstraintsIfNecessary(false)
+                                        .setExceedRendererCapabilitiesIfNecessary(allowExceedCodecCapabilities)
+                                        .setExceedVideoConstraintsIfNecessary(allowExceedCodecCapabilities)
                                         .build()
                                 }
                                 dvStartupFallbackStage += 1
@@ -1390,8 +1394,8 @@ fun PlayerScreen(
                         selector?.let {
                             it.parameters = it.buildUponParameters()
                                 .setPreferredVideoMimeType(preferredMime)
-                                .setExceedRendererCapabilitiesIfNecessary(false)
-                                .setExceedVideoConstraintsIfNecessary(false)
+                                .setExceedRendererCapabilitiesIfNecessary(allowExceedCodecCapabilities)
+                                .setExceedVideoConstraintsIfNecessary(allowExceedCodecCapabilities)
                                 .build()
                         }
                         val resumeAt = exoPlayer.currentPosition.coerceAtLeast(0L)
