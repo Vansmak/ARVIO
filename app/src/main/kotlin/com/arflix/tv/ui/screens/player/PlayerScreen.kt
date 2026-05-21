@@ -362,7 +362,7 @@ fun PlayerScreen(
     var bufferingStartTime by remember { mutableStateOf<Long?>(null) }
     val bufferingTimeoutMs = 25_000L // Mid-playback timeout for stuck buffering
     var userSelectedSourceManually by remember { mutableStateOf(false) }
-    val allowStartupSourceFallback = false
+    val allowStartupSourceFallback = true
     val allowMidPlaybackSourceFallback = false
     val initialBufferingTimeoutMs = remember(uiState.selectedStream, userSelectedSourceManually) {
         estimateInitialStartupTimeoutMs(
@@ -432,20 +432,15 @@ fun PlayerScreen(
             viewModel.onFailoverAttempt(success = false)
             false
         } else {
-            val candidateIndexes = (1 until streams.size)
+            val nextIndex = (1 until streams.size)
                 .map { offset -> (currentStreamIndex + offset) % streams.size }
-                .filter { idx ->
+                .firstOrNull { idx ->
                     val candidate = streams[idx]
                     candidate.url?.isNotBlank() == true &&
                         idx !in triedStreamIndexes &&
                         (skipAddonId.isNullOrBlank() || candidate.addonId != skipAddonId) &&
                         !viewModel.isPlaybackHostTemporarilyBad(candidate)
-                }
-            val nextIndex = candidateIndexes
-                .minWithOrNull(
-                    compareBy<Int> { startupFallbackRank(streams[it]) }
-                        .thenBy { it }
-                ) ?: -1
+                } ?: -1
 
             if (nextIndex < 0) {
                 viewModel.onFailoverAttempt(success = false)
@@ -456,8 +451,7 @@ fun PlayerScreen(
                 playbackStartupDiag(
                     "advancing source from index=$currentStreamIndex to index=$nextIndex " +
                         "from=${uiState.selectedStream?.addonId}/${uiState.selectedStream?.quality}/${uiState.selectedStream?.size} " +
-                        "to=${streams[nextIndex].addonId}/${streams[nextIndex].quality}/${streams[nextIndex].size} " +
-                        "rank=${startupFallbackRank(streams[nextIndex])}"
+                        "to=${streams[nextIndex].addonId}/${streams[nextIndex].quality}/${streams[nextIndex].size}"
                 )
                 viewModel.onSelectedStreamPlaybackFailure()
                 currentStreamIndex = nextIndex
@@ -750,18 +744,14 @@ fun PlayerScreen(
                             // or DNS/SSL/network failures. Even if the user manually picked this
                             // source, a dead URL isn't something they "selected" — it should
                             // skip to the next one rather than spin on a pulsing logo forever.
-                            val isUnrecoverableSource =
-                                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ||
-                                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ||
-                                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NO_PERMISSION ||
-                                error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+                            // Guarded below so only autoplay advances; manual selections stay pinned.
                             val isDnsFailure = "unknownhost" in timeoutMessage ||
                                 "unable to resolve host" in timeoutMessage ||
                                 "no address associated with hostname" in timeoutMessage
                             val deadAddonId = if (isDnsFailure) latestUiState.selectedStream?.addonId else null
                             if (!hasPlaybackStarted &&
                                 allowStartupSourceFallback &&
-                                (!userSelectedSourceManually || isUnrecoverableSource) &&
+                                !userSelectedSourceManually &&
                                 tryAdvanceToNextStream(deadAddonId)
                             ) {
                                 return
@@ -1350,18 +1340,22 @@ fun PlayerScreen(
                         "hard startup timeout elapsedMs=$startupBufferDuration hardTimeoutMs=$hardTimeoutMs " +
                             "state=${exoPlayer.playbackState} failovers=$autoAdvanceAttempts"
                     )
-                    if (!startupHardFailureReported) {
-                        startupHardFailureReported = true
-                        playbackIssueReported = true
-                        viewModel.onSelectedStreamPlaybackFailure()
-                        viewModel.reportPlaybackError(
-                            if (autoAdvanceAttempts > 0 || startupSameSourceRetryCount > 0) {
-                                "Source did not start after retries. Try another source."
-                            } else {
-                                "Source did not start in time. Try another source."
-                            }
-                        )
+                    if (allowStartupSourceFallback &&
+                        !userSelectedSourceManually &&
+                        tryAdvanceToNextStream()
+                    ) {
+                        continue
                     }
+                    startupHardFailureReported = true
+                    playbackIssueReported = true
+                    viewModel.onSelectedStreamPlaybackFailure()
+                    viewModel.reportPlaybackError(
+                        if (autoAdvanceAttempts > 0 || startupSameSourceRetryCount > 0) {
+                            "Source did not start after retries. Try another source."
+                        } else {
+                            "Source did not start in time. Try another source."
+                        }
+                    )
                 }
             }
 
@@ -4418,49 +4412,6 @@ private fun playbackStartupDiag(message: String) {
     if (PLAYER_SCREEN_DIAGNOSTICS) {
         System.err.println("[PlaybackStartup] $message")
     }
-}
-
-private fun startupFallbackRank(stream: StreamSource): Int {
-    val text = buildString {
-        append(stream.quality)
-        append(' ')
-        append(stream.source)
-        append(' ')
-        append(stream.addonName)
-        stream.behaviorHints?.filename?.let {
-            append(' ')
-            append(it)
-        }
-    }.lowercase()
-    var rank = 0
-    if (stream.behaviorHints?.notWebReady == true) rank += 10_000
-    if (isLikelyDolbyVisionStream(stream)) rank += 4_000
-    if (text.contains("hevc") || text.contains("h265") || text.contains("x265")) rank += 2_500
-    if (text.contains("4k") || text.contains("2160") || text.contains("uhd")) rank += 2_000
-    if (text.contains("remux")) rank += 1_500
-    if (text.contains("hdr")) rank += 600
-
-    rank += when {
-        text.contains("1080") -> 0
-        text.contains("720") -> 250
-        text.contains("480") -> 500
-        stream.quality.contains("1080", ignoreCase = true) -> 0
-        stream.quality.contains("720", ignoreCase = true) -> 250
-        else -> 350
-    }
-
-    val sizeBytes = parseSizeToBytes(stream.size)
-    rank += when {
-        sizeBytes >= 30L * 1024 * 1024 * 1024 -> 1_200
-        sizeBytes >= 15L * 1024 * 1024 * 1024 -> 650
-        sizeBytes >= 8L * 1024 * 1024 * 1024 -> 250
-        else -> 0
-    }
-
-    if (stream.behaviorHints?.cached == true) rank -= 400
-    if (text.contains("x264") || text.contains("h264") || text.contains("avc")) rank -= 300
-    if (text.contains("web-dl") || text.contains("webrip")) rank -= 100
-    return rank
 }
 
 private fun resolveFrameRateOffStrategy(): Int {
