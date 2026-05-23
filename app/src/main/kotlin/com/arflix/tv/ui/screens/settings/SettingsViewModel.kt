@@ -2664,8 +2664,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun syncLocalStateToCloud(silent: Boolean = false, force: Boolean = false) {
-        if (!force && !_uiState.value.isLoggedIn) return
-        if (authRepository.getCurrentUserId().isNullOrBlank()) return
         cloudSyncRepository.markLocalStateDirty()
         viewModelScope.launch {
             if (!force) {
@@ -2692,7 +2690,6 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun syncCloudStateToLocal(silent: Boolean = false) {
-        if (!_uiState.value.isLoggedIn) return
         viewModelScope.launch {
             restoreCloudStateToLocalInternal(silent = silent)
         }
@@ -2708,10 +2705,11 @@ class SettingsViewModel @Inject constructor(
                 toastType = ToastType.INFO
             )
 
-            if (!ensureCloudSyncSession()) {
+            val serverConfigured = runCatching { cloudSyncRepository.isSyncServerConfigured() }.getOrDefault(false)
+            if (!serverConfigured) {
                 _uiState.value = _uiState.value.copy(
                     isForceCloudSyncing = false,
-                    toastMessage = "Sign in to ARVIO Cloud first",
+                    toastMessage = "Connect to a sync server first",
                     toastType = ToastType.INFO
                 )
                 return@launch

@@ -2764,6 +2764,7 @@ class HomeViewModel @Inject constructor(
         if (now - lastCloudPullTimestamp < cloudPullThrottleMs) return
         lastCloudPullTimestamp = now
         viewModelScope.launch(Dispatchers.IO) {
+            if (!cloudSyncRepository.isSyncServerConfigured()) return@launch
             // If a previous push failed (dirty flag), retry it now before pulling.
             // This ensures the cloud has our latest state before we pull the other
             // device's state on top of it — preventing stale overwrites.

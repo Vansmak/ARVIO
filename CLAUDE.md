@@ -115,3 +115,20 @@ Routes:
 - `PUT /settings` — save Arvio settings blob (full CloudSync JSON)
 
 Settings stored at `data/arvio_settings.json` inside the Episeerr working directory.
+
+## TODO
+
+### Home server "Continue Watching" / recently-watched ordering
+When the home screen loads library content from Jellyfin/Plex/Emby, items appear in a default server order that doesn't reflect what the user is actually watching.
+
+**Goal:** Add a "Continue Watching" row (or sort existing rows) using each server's own in-progress tracking — not Trakt, not local history, but the server's native resume data.
+
+**Endpoints:**
+- Jellyfin/Emby: `GET /Users/{userId}/Items/Resume?MediaTypes=Video&Limit=20`
+- Plex: `GET /hubs/home/onDeck` (or per-library `/library/sections/{id}/onDeck`)
+
+**Scope:**
+- New API call in `HomeServerRepository` per server type
+- New home screen row ("Continue on Jellyfin", etc.) populated from resume data
+- Stream sources for those items already work via existing `buildStreamSources()` path
+- Should be per-profile (each profile has its own home server connection)
