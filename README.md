@@ -4,6 +4,23 @@ ARVIO is an Android media hub for TV, phone, and tablet form factors. This repos
 
 The app provides a media browser, player shell, profile support, optional cloud sync, IPTV playlist support, catalog configuration, home-server integrations, and integrations with user-configured sources. ARVIO does not host, store, sell, or distribute movies, series, live TV channels, playlists, streams, or other third-party media.
 
+## Fork additions (Vansmak/ARVIO)
+
+This fork replaces ARVIO Cloud (Supabase) with self-hosted settings sync and adds optional [Episeerr](https://github.com/Vansmak/episeerr) integration for media management.
+
+**Self-hosted sync** — settings, profiles, addons, IPTV, home server connections, and watchlist are synced to a server you control. No cloud account required. See [sync-server/](sync-server/) for a minimal Docker container, or use Episeerr if you already run it.
+
+**New device setup:** tap **Connect to Server** on the profile screen, enter your server URL, and all settings are restored in one step.
+
+**Episeerr integration** (optional, separate from sync):
+- Playback webhooks — posts start/pause/stop/progress events to Episeerr
+- LAN watchlist server — serves watchlist as JSON on port 7979
+- Sonarr/Radarr sync via the Episeerr addon in Plugins & Extensions
+
+**Direct API calls** — TMDB and Trakt are called directly with your own API keys. The Supabase Edge Function proxy is no longer used.
+
+---
+
 ## Repository Purpose
 
 This GitHub repository is for:
@@ -69,7 +86,9 @@ Contributors should not submit copyrighted media, credentials, private keys, acc
 
 ## Cloud Sync
 
-ARVIO Cloud is optional. When enabled, it can sync profiles, settings, catalogs, IPTV state, watch progress, watchlist state, and profile avatars across devices. See [PRIVACY.md](PRIVACY.md) for details and account deletion instructions.
+**This fork uses self-hosted sync instead of ARVIO Cloud.** Settings are synced to your own server via three lightweight HTTP endpoints. See [sync-server/](sync-server/) for a ready-to-run Docker container, or point the app at an Episeerr instance.
+
+The original ARVIO Cloud (Supabase) backend is no longer required and has been removed from the UI.
 
 ## Build And Run
 

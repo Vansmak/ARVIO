@@ -1,0 +1,11 @@
+services:
+  arvio-sync:
+    build: .
+    ports:
+      - "7000:7000"      # change the left side if 7000 is taken on your host
+    volumes:
+      - ./data:/data     # settings stored in ./data/arvio_settings.json
+    restart: unless-stopped
+    environment:
+      - PORT=7000
+      - DATA_FILE=/data/arvio_settings.json
