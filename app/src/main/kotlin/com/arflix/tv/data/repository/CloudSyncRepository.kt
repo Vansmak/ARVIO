@@ -89,11 +89,13 @@ class CloudSyncRepository @Inject constructor(
     private suspend fun syncServerSavePayload(payload: String): Result<Unit> {
         val base = syncServerBaseUrl()
         if (base.isBlank()) return Result.failure(IllegalStateException("Sync server URL not configured"))
-        return runCatching {
-            val body = payload.toRequestBody("application/json".toMediaType())
-            val req = Request.Builder().url("$base/api/integration/arvio/settings").put(body).build()
-            okHttpClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) throw IllegalStateException("Sync server PUT failed: ${resp.code}")
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val body = payload.toRequestBody("application/json".toMediaType())
+                val req = Request.Builder().url("$base/api/integration/arvio/settings").put(body).build()
+                okHttpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) throw IllegalStateException("Sync server PUT failed: ${resp.code}")
+                }
             }
         }
     }
@@ -101,12 +103,14 @@ class CloudSyncRepository @Inject constructor(
     private suspend fun syncServerLoadPayload(): Result<String?> {
         val base = syncServerBaseUrl()
         if (base.isBlank()) return Result.failure(IllegalStateException("Sync server URL not configured"))
-        return runCatching {
-            val req = Request.Builder().url("$base/api/integration/arvio/settings").get().build()
-            okHttpClient.newCall(req).execute().use { resp ->
-                if (resp.code == 404) return@runCatching null
-                if (!resp.isSuccessful) throw IllegalStateException("Sync server GET failed: ${resp.code}")
-                resp.body?.string()
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val req = Request.Builder().url("$base/api/integration/arvio/settings").get().build()
+                okHttpClient.newCall(req).execute().use { resp ->
+                    if (resp.code == 404) return@runCatching null
+                    if (!resp.isSuccessful) throw IllegalStateException("Sync server GET failed: ${resp.code}")
+                    resp.body?.string()
+                }
             }
         }
     }
