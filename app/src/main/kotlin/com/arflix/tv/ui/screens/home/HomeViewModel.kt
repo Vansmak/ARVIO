@@ -162,6 +162,7 @@ class HomeViewModel @Inject constructor(
 
     companion object {
         const val FAVORITE_TV_CATEGORY_ID = "favorite_tv"
+        const val WATCHLIST_CATEGORY_ID = "my_watchlist"
         /** Prefix used in MediaItem.status to identify IPTV items. */
         const val IPTV_STATUS_PREFIX = "iptv:"
         private const val TOP_10_ITEM_LIMIT = 10
@@ -1094,6 +1095,29 @@ class HomeViewModel @Inject constructor(
                         startEpgRefreshTimer()
                     }
                 }
+        }
+
+        // Reactively inject the watchlist row whenever watchlist items change.
+        viewModelScope.launch {
+            watchlistRepository.watchlistItems.collect { items ->
+                val current = _uiState.value.categories
+                if (current.isEmpty()) return@collect
+                val updated = current.toMutableList()
+                updated.removeAll { it.id == WATCHLIST_CATEGORY_ID }
+                if (items.isNotEmpty()) {
+                    val cat = Category(id = WATCHLIST_CATEGORY_ID, title = "My Watchlist", items = items)
+                    val cwIdx = updated.indexOfFirst { it.id == "continue_watching" }
+                    val insertIdx = if (cwIdx >= 0) cwIdx + 1 else 0
+                    updated.add(insertIdx, cat)
+                }
+                if (updated != current) {
+                    _uiState.value = _uiState.value.copy(categories = updated)
+                }
+            }
+        }
+        // Pre-load watchlist items so the row appears on first home load.
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { watchlistRepository.getWatchlistItems() }
         }
 
         // Load top-level UI preferences used on Home
@@ -2042,6 +2066,18 @@ class HomeViewModel @Inject constructor(
                     )
                     categories.add(0, cwCat)
                 }
+                // Inject watchlist row right after Continue Watching
+                val cachedWatchlistItems = watchlistRepository.getCachedItems()
+                if (cachedWatchlistItems.isNotEmpty()) {
+                    val cwIdx = categories.indexOfFirst { it.id == "continue_watching" }
+                    val insertIdx = if (cwIdx >= 0) cwIdx + 1 else 0
+                    categories.add(insertIdx, Category(
+                        id = WATCHLIST_CATEGORY_ID,
+                        title = "My Watchlist",
+                        items = cachedWatchlistItems
+                    ))
+                }
+
                 // Launch the independent CW fetch
                 launchContinueWatchingFetch()
 

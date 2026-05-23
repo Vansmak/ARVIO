@@ -97,7 +97,7 @@
     <string name="add_addon">הוסף תוסף</string>
     <string name="trakt_account">חשבון Trakt</string>
     <string name="cloud_account">חשבון ענן</string>
-    <string name="force_cloud_sync">סנכרון ענן מאולץ</string>
+    <string name="force_cloud_sync">סנכרון מאולץ</string>
     <string name="switch_profile">החלף פרופיל</string>
     <string name="app_version">גרסת האפליקציה</string>
 
@@ -171,7 +171,7 @@
     <string name="set_profile_pin">הגדר PIN לפרופיל</string>
     <string name="done">סיום</string>
     <string name="save">שמור</string>
-    <string name="connect_to_cloud">התחבר ל-ARVIO Cloud</string>
+    <string name="connect_to_server">התחבר לשרת</string>
 
     <!-- AI Subtitles -->
     <string name="ai_subtitles_section">כתוביות AI</string>

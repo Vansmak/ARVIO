@@ -1889,7 +1889,8 @@ class HomeServerRepository @Inject constructor(
                         filename = mediaSource.name.ifBlank { item.name },
                         videoSize = mediaSource.sizeBytes.takeIf { it > 0L },
                         proxyHeaders = ProxyHeaders(request = playbackHeaders(connection))
-                    )
+                    ),
+                    serverItemId = item.id.takeIf { it.isNotBlank() }
                 )
             }
             .distinctBy { "${it.url?.trim().orEmpty()}|${it.source}" }

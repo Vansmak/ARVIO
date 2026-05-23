@@ -30,6 +30,13 @@ data class ProfileUiState(
     val isLoading: Boolean = true,
     val isSwitchingProfile: Boolean = false,
     val isManageMode: Boolean = false,
+    // Sync server state — true when SYNC_SERVER_URL_KEY is configured
+    val isSyncServerConnected: Boolean = false,
+    // Connect to Server dialog state
+    val showConnectServerDialog: Boolean = false,
+    val connectServerUrl: String = "",
+    val isConnectingToServer: Boolean = false,
+    val connectServerError: String? = null,
     // Add profile dialog state
     val showAddDialog: Boolean = false,
     val newProfileName: String = "",
@@ -70,6 +77,67 @@ class ProfileViewModel @Inject constructor(
     init {
         loadProfiles()
         observeProfiles()
+        loadSyncServerState()
+    }
+
+    private fun loadSyncServerState() {
+        viewModelScope.launch {
+            val connected = runCatching { cloudSyncRepository.isSyncServerConfigured() }.getOrDefault(false)
+            _uiState.value = _uiState.value.copy(isSyncServerConnected = connected)
+        }
+    }
+
+    // ========== Connect to Server ==========
+
+    fun showConnectServerDialog() {
+        _uiState.value = _uiState.value.copy(
+            showConnectServerDialog = true,
+            connectServerUrl = "",
+            connectServerError = null,
+            isConnectingToServer = false
+        )
+    }
+
+    fun dismissConnectServerDialog() {
+        _uiState.value = _uiState.value.copy(
+            showConnectServerDialog = false,
+            connectServerUrl = "",
+            connectServerError = null,
+            isConnectingToServer = false
+        )
+    }
+
+    fun setConnectServerUrl(url: String) {
+        _uiState.value = _uiState.value.copy(connectServerUrl = url, connectServerError = null)
+    }
+
+    fun connectToServer() {
+        val url = _uiState.value.connectServerUrl.trim()
+        if (url.isBlank()) {
+            _uiState.value = _uiState.value.copy(connectServerError = "Please enter a server URL")
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isConnectingToServer = true, connectServerError = null)
+            val reachable = runCatching { cloudSyncRepository.verifySyncServer(url) }.getOrDefault(false)
+            if (!reachable) {
+                _uiState.value = _uiState.value.copy(
+                    isConnectingToServer = false,
+                    connectServerError = "Could not reach server. Check the URL and try again."
+                )
+                return@launch
+            }
+            cloudSyncRepository.saveSyncServerUrl(url)
+            runCatching { cloudSyncRepository.pullFromCloud() }
+            _uiState.value = _uiState.value.copy(
+                isConnectingToServer = false,
+                showConnectServerDialog = false,
+                isSyncServerConnected = true,
+                connectServerUrl = "",
+                connectServerError = null
+            )
+            showToast("Settings restored from server", ToastType.SUCCESS)
+        }
     }
 
     private fun loadProfiles() {

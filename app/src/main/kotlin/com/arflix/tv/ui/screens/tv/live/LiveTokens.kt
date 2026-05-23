@@ -59,17 +59,16 @@ object LiveColors {
 val LiveMono: FontFamily = InterFontFamily
 
 object LiveType {
-    // v4 — minimum readable at 10ft. 7sp is the absolute floor for the
-    // tightest tags/badges; no higher than 11sp anywhere on the TV page.
-    val ChannelName  = TextStyle(fontFamily = InterFontFamily, fontSize = 11.sp, fontWeight = FontWeight.W600, letterSpacing = 0.sp, lineHeight = 14.sp)
-    val ProgramTitle = TextStyle(fontFamily = InterFontFamily, fontSize = 10.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 13.sp)
-    val CellTitle    = TextStyle(fontFamily = InterFontFamily, fontSize = 9.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 12.sp)
-    val BodySynopsis = TextStyle(fontFamily = InterFontFamily, fontSize = 8.sp, fontWeight = FontWeight.W400, letterSpacing = 0.sp, lineHeight = 11.sp)
-    val CatLabel     = TextStyle(fontFamily = InterFontFamily, fontSize = 9.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 12.sp)
-    val SectionTag   = TextStyle(fontFamily = InterFontFamily, fontSize = 8.sp, fontWeight = FontWeight.W600, letterSpacing = 0.sp, lineHeight = 11.sp)
-    val Badge        = TextStyle(fontFamily = InterFontFamily, fontSize = 8.sp, fontWeight = FontWeight.W600, letterSpacing = 0.sp, lineHeight = 11.sp)
-    val TimeMono     = TextStyle(fontFamily = InterFontFamily, fontSize = 8.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 11.sp)
-    val NumberMono   = TextStyle(fontFamily = InterFontFamily, fontSize = 8.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 11.sp)
+    // TV couch-readable sizes — minimum 14sp for body, larger for titles.
+    val ChannelName  = TextStyle(fontFamily = InterFontFamily, fontSize = 14.sp, fontWeight = FontWeight.W600, letterSpacing = 0.sp, lineHeight = 18.sp)
+    val ProgramTitle = TextStyle(fontFamily = InterFontFamily, fontSize = 13.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 17.sp)
+    val CellTitle    = TextStyle(fontFamily = InterFontFamily, fontSize = 13.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 17.sp)
+    val BodySynopsis = TextStyle(fontFamily = InterFontFamily, fontSize = 11.sp, fontWeight = FontWeight.W400, letterSpacing = 0.sp, lineHeight = 15.sp)
+    val CatLabel     = TextStyle(fontFamily = InterFontFamily, fontSize = 12.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 16.sp)
+    val SectionTag   = TextStyle(fontFamily = InterFontFamily, fontSize = 11.sp, fontWeight = FontWeight.W600, letterSpacing = 0.sp, lineHeight = 15.sp)
+    val Badge        = TextStyle(fontFamily = InterFontFamily, fontSize = 10.sp, fontWeight = FontWeight.W600, letterSpacing = 0.sp, lineHeight = 14.sp)
+    val TimeMono     = TextStyle(fontFamily = InterFontFamily, fontSize = 11.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 15.sp)
+    val NumberMono   = TextStyle(fontFamily = InterFontFamily, fontSize = 11.sp, fontWeight = FontWeight.W500, letterSpacing = 0.sp, lineHeight = 15.sp)
 }
 
 object LiveDims {
@@ -83,10 +82,10 @@ object LiveDims {
     val MiniPlayerWidth  = 300.dp
     val MiniPlayerHeight = 168.dp
 
-    val EpgChannelColWidth = 220.dp
-    val EpgRowHeight       = 42.dp
-    val EpgHeaderHeight    = 26.dp
-    val EpgPxPerMinute     = 4
+    val EpgChannelColWidth = 240.dp
+    val EpgRowHeight       = 62.dp
+    val EpgHeaderHeight    = 38.dp
+    val EpgPxPerMinute     = 5
     val EpgHalfHourWidth   = 120.dp
 
     val PanelRadius     = 12.dp

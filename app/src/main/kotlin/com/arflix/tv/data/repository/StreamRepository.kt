@@ -381,8 +381,12 @@ class StreamRepository @Inject constructor(
         val addons = installedAddons.first().toMutableList()
         val index = addons.indexOfFirst { it.id == addonId }
         if (index >= 0) {
-            addons[index] = addons[index].copy(isEnabled = !addons[index].isEnabled)
+            val wasEnabled = addons[index].isEnabled
+            addons[index] = addons[index].copy(isEnabled = !wasEnabled)
             saveAddons(addons)
+            if (addonId == "episeerr" && wasEnabled) {
+                context.settingsDataStore.edit { it.remove(EPISEERR_URL_KEY) }
+            }
         }
     }
 
@@ -395,6 +399,11 @@ class StreamRepository @Inject constructor(
             val normalizedUrl = resolveAddonInstallUrl(url)
             if (normalizedUrl.isBlank()) {
                 return@withContext Result.failure(IllegalArgumentException("Addon URL is empty"))
+            }
+
+            // Detect Episeerr before attempting Stremio manifest fetch
+            if (looksLikeEpiseerr(normalizedUrl)) {
+                return@withContext installEpiseerrAddon(normalizedUrl)
             }
 
             httpLocalScraperRuntime.fetchInstallCandidate(
@@ -499,6 +508,36 @@ class StreamRepository @Inject constructor(
         addons.add(newAddon)
         saveAddons(addons)
         return newAddon
+    }
+
+    private suspend fun looksLikeEpiseerr(url: String): Boolean {
+        return withTimeoutOrNull(5_000L) {
+            runCatching {
+                val statusUrl = url.trimEnd('/') + "/api/integration/arvio/status"
+                val request = Request.Builder().url(statusUrl).get().build()
+                okHttpClient.newCall(request).execute().use { it.isSuccessful }
+            }.getOrElse { false }
+        } ?: false
+    }
+
+    private suspend fun installEpiseerrAddon(url: String): Result<Addon> {
+        val cleanUrl = url.trimEnd('/')
+        val addon = Addon(
+            id = "episeerr",
+            name = "Episeerr",
+            version = "1.0",
+            description = "Media management integration — Sonarr, Radarr and watchlist sync",
+            isInstalled = true,
+            isEnabled = true,
+            type = AddonType.INTEGRATION,
+            url = cleanUrl
+        )
+        val current = installedAddons.first().toMutableList()
+        current.removeAll { it.id == "episeerr" }
+        current.add(0, addon) // put Episeerr at the top of the list
+        saveAddons(current)
+        context.settingsDataStore.edit { it[EPISEERR_URL_KEY] = cleanUrl }
+        return Result.success(addon)
     }
 
     suspend fun ensureCustomAddons(urls: List<String>): List<Result<Addon>> = withContext(Dispatchers.IO) {
@@ -647,6 +686,9 @@ class StreamRepository @Inject constructor(
         val current = installedAddons.first()
         val addons = current.filter { it.id != addonId }
         saveAddons(addons)
+        if (addonId == "episeerr") {
+            context.settingsDataStore.edit { it.remove(EPISEERR_URL_KEY) }
+        }
     }
 
     suspend fun replaceAddonsFromCloud(addons: List<Addon>) {
@@ -729,6 +771,7 @@ class StreamRepository @Inject constructor(
     }
 
     private fun isIncompleteExternalAddon(addon: Addon): Boolean {
+        if (addon.type == AddonType.INTEGRATION) return false // integration addons have no manifest by design
         return addon.id != "opensubtitles" &&
             addon.url.isNullOrBlank() &&
             addon.transportUrl.isNullOrBlank() &&
@@ -736,7 +779,9 @@ class StreamRepository @Inject constructor(
     }
 
     private suspend fun installedAddonsForSourceResolution(): List<Addon> {
-        return installedAddons.first().filterNot(::isIncompleteExternalAddon)
+        return installedAddons.first()
+            .filter { it.type != AddonType.INTEGRATION } // INTEGRATION addons don't provide streams
+            .filterNot(::isIncompleteExternalAddon)
     }
 
     /**

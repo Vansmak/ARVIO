@@ -111,7 +111,6 @@ fun AppNavigation(
     preloadedHeroLogoUrl: String? = null,
     preloadedLogoCache: Map<String, String> = emptyMap(),
     currentProfile: Profile? = null,
-    isCloudConnected: Boolean = false,
     onSwitchProfile: () -> Unit = {},
     onTvFullscreenChanged: (Boolean) -> Unit = {},
     onExitApp: () -> Unit = {}
@@ -302,11 +301,7 @@ fun AppNavigation(
                         popUpTo(Screen.ProfileSelection.route) { inclusive = true }
                     }
                 },
-                onShowAddProfile = { /* Handled internally by ProfileSelectionScreen */ },
-                onConnectCloud = {
-                    navController.navigate("settings?autoCloudAuth=true")
-                },
-                isCloudConnected = isCloudConnected
+                onShowAddProfile = { /* Handled internally by ProfileSelectionScreen */ }
             )
         }
 

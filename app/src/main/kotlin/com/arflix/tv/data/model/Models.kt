@@ -162,7 +162,9 @@ data class StreamSource(
     val subtitles: List<Subtitle> = emptyList(),
     // Stremio "sources" are commonly tracker URLs. Keeping them helps P2P playback (TorrServer) work
     // across more addons.
-    val sources: List<String> = emptyList()
+    val sources: List<String> = emptyList(),
+    // Home server item ID, preserved so session reporting can reference the server item after playback starts.
+    val serverItemId: String? = null
 ) : Serializable
 
 /**
@@ -271,7 +273,7 @@ data class Addon(
 )
 
 enum class AddonType {
-    OFFICIAL, COMMUNITY, SUBTITLE, METADATA, CUSTOM
+    OFFICIAL, COMMUNITY, SUBTITLE, METADATA, CUSTOM, INTEGRATION
 }
 
 enum class RuntimeKind {

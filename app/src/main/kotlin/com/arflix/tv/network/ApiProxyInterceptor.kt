@@ -22,14 +22,19 @@ class ApiProxyInterceptor : Interceptor {
 
         return when (originalUrl.host) {
             "api.themoviedb.org" -> {
-                // Route TMDB requests through proxy
-                val proxyRequest = rewriteForTmdbProxy(originalRequest) ?: originalRequest
-                chain.proceed(proxyRequest)
+                // Call TMDB directly — api_key is already on the request from BuildConfig.TMDB_API_KEY
+                chain.proceed(originalRequest)
             }
             "api.trakt.tv" -> {
-                // Route Trakt requests through proxy
-                val proxyRequest = rewriteForTraktProxy(originalRequest) ?: originalRequest
-                chain.proceed(proxyRequest)
+                // Call Trakt directly — add required API headers (replaces any already set by Retrofit)
+                val clientId = Constants.TRAKT_CLIENT_ID
+                val enriched = if (clientId.isNotBlank()) {
+                    originalRequest.newBuilder()
+                        .header("trakt-api-key", clientId)
+                        .header("trakt-api-version", "2")
+                        .build()
+                } else originalRequest
+                chain.proceed(enriched)
             }
             else -> {
                 // Pass through other requests unchanged

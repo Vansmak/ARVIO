@@ -625,7 +625,6 @@ fun ArflixApp(
                 preloadedHeroLogoUrl = preloadedHeroLogoUrl,
                 preloadedLogoCache = preloadedLogoCache,
                 currentProfile = activeProfile,
-                isCloudConnected = authState is AuthState.Authenticated,
                 onSwitchProfile = {
                     appCoroutineScope.launch {
                         traktRepository.clearAllProfileCaches()

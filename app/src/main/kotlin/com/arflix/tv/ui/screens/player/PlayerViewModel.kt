@@ -141,7 +141,9 @@ class PlayerViewModel @Inject constructor(
     private val launcherContinueWatchingRepository: LauncherContinueWatchingRepository,
     private val tmdbApi: TmdbApi,
     private val skipIntroRepository: SkipIntroRepository,
-    private val playbackTelemetryRepository: PlaybackTelemetryRepository
+    private val playbackTelemetryRepository: PlaybackTelemetryRepository,
+    private val progressWebhookRepository: com.arflix.tv.data.repository.ProgressWebhookRepository,
+    private val serverSessionRepository: com.arflix.tv.data.repository.ServerSessionRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -322,6 +324,7 @@ class PlayerViewModel @Inject constructor(
         lastScrobbleTime = 0
         lastWatchHistorySaveTime = 0
         lastWatchHistorySavedPositionSeconds = -1L
+        serverSessionRepository.resetSession()
         subtitleRefreshJob?.cancel()
         subtitleSelectionJob?.cancel()
         vodAppendJob?.cancel()
@@ -2397,6 +2400,7 @@ class PlayerViewModel @Inject constructor(
             val progressFraction = (progressPercent / 100f).coerceIn(0f, 1f)
 
             // Scrobble start/pause/updates with debounce
+            val serverItemId = _uiState.value.selectedStream?.serverItemId
             if (isPlaying && !lastIsPlaying) {
                 try {
                     traktRepository.scrobbleStart(
@@ -2408,6 +2412,23 @@ class PlayerViewModel @Inject constructor(
                     )
                 } catch (e: Exception) {
                     // Scrobble start failed
+                }
+                runCatching {
+                    progressWebhookRepository.maybeFireWebhook(
+                        event = "start", mediaType = currentMediaType, tmdbId = currentMediaId,
+                        title = currentTitle, season = currentSeason, episode = currentEpisode,
+                        positionSeconds = (position / 1000L).coerceAtLeast(0L),
+                        durationSeconds = (duration / 1000L).coerceAtLeast(1L),
+                        progressPercent = progressPercent, serverItemId = serverItemId
+                    )
+                }
+                if (!serverItemId.isNullOrBlank()) {
+                    runCatching {
+                        serverSessionRepository.reportStart(
+                            serverItemId = serverItemId, mediaType = currentMediaType,
+                            positionMs = position, durationMs = duration
+                        )
+                    }
                 }
                 lastScrobbleTime = currentTime
             } else if (!isPlaying && lastIsPlaying) {
@@ -2422,6 +2443,23 @@ class PlayerViewModel @Inject constructor(
                 } catch (e: Exception) {
                     // Scrobble pause immediate failed
                 }
+                runCatching {
+                    progressWebhookRepository.maybeFireWebhook(
+                        event = "pause", mediaType = currentMediaType, tmdbId = currentMediaId,
+                        title = currentTitle, season = currentSeason, episode = currentEpisode,
+                        positionSeconds = (position / 1000L).coerceAtLeast(0L),
+                        durationSeconds = (duration / 1000L).coerceAtLeast(1L),
+                        progressPercent = progressPercent, serverItemId = serverItemId
+                    )
+                }
+                if (!serverItemId.isNullOrBlank()) {
+                    runCatching {
+                        serverSessionRepository.reportProgress(
+                            serverItemId = serverItemId, mediaType = currentMediaType,
+                            positionMs = position, durationMs = duration, isPaused = true
+                        )
+                    }
+                }
                 lastScrobbleTime = currentTime
             } else if (isPlaying && currentTime - lastScrobbleTime >= SCROBBLE_UPDATE_INTERVAL_MS) {
                 // Periodic scrobble update while playing (use scrobbleStart, not pause)
@@ -2435,6 +2473,23 @@ class PlayerViewModel @Inject constructor(
                     )
                 } catch (e: Exception) {
                     // Scrobble update failed
+                }
+                runCatching {
+                    progressWebhookRepository.maybeFireWebhook(
+                        event = "progress", mediaType = currentMediaType, tmdbId = currentMediaId,
+                        title = currentTitle, season = currentSeason, episode = currentEpisode,
+                        positionSeconds = (position / 1000L).coerceAtLeast(0L),
+                        durationSeconds = (duration / 1000L).coerceAtLeast(1L),
+                        progressPercent = progressPercent, serverItemId = serverItemId
+                    )
+                }
+                if (!serverItemId.isNullOrBlank()) {
+                    runCatching {
+                        serverSessionRepository.reportProgress(
+                            serverItemId = serverItemId, mediaType = currentMediaType,
+                            positionMs = position, durationMs = duration, isPaused = false
+                        )
+                    }
                 }
                 lastScrobbleTime = currentTime
             }
@@ -2525,6 +2580,23 @@ class PlayerViewModel @Inject constructor(
                     )
                 } catch (e: Exception) {
                     // Scrobble stop failed
+                }
+                runCatching {
+                    progressWebhookRepository.maybeFireWebhook(
+                        event = "stop", mediaType = currentMediaType, tmdbId = currentMediaId,
+                        title = currentTitle, season = currentSeason, episode = currentEpisode,
+                        positionSeconds = (position / 1000L).coerceAtLeast(0L),
+                        durationSeconds = (duration / 1000L).coerceAtLeast(1L),
+                        progressPercent = progressPercent, serverItemId = serverItemId
+                    )
+                }
+                if (!serverItemId.isNullOrBlank()) {
+                    runCatching {
+                        serverSessionRepository.reportStop(
+                            serverItemId = serverItemId, mediaType = currentMediaType,
+                            positionMs = position, durationMs = duration
+                        )
+                    }
                 }
                 try {
                     val safeSeason = currentSeason

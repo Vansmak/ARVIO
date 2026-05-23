@@ -31,6 +31,9 @@ import com.arflix.tv.data.repository.CloudSyncRepository
 import com.arflix.tv.data.repository.RealtimeSyncManager
 import com.arflix.tv.data.repository.WatchlistRepository
 import com.arflix.tv.data.repository.ProfileManager
+import com.arflix.tv.data.repository.WATCHLIST_API_ENABLED_KEY
+import com.arflix.tv.data.repository.WATCHLIST_API_PORT_KEY
+import com.arflix.tv.server.WatchlistApiServer
 import com.arflix.tv.util.AppLogger
 import com.arflix.tv.util.CrashlyticsProvider
 import com.arflix.tv.util.DeviceType
@@ -95,6 +98,17 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
             OkHttpProvider.setCustomUserAgent(savedUserAgent)
 
             runCatching { OkHttpProvider.dns.lookup("image.tmdb.org") }
+        }
+
+        // Start watchlist API server if enabled
+        appScope.launch(Dispatchers.IO) {
+            val prefs = settingsDataStore.data.first()
+            if (prefs[WATCHLIST_API_ENABLED_KEY] == true) {
+                val port = prefs[WATCHLIST_API_PORT_KEY]?.toIntOrNull() ?: WatchlistApiServer.DEFAULT_PORT
+                // Ensure watchlist cache is primed before serving
+                runCatching { watchlistRepository.getWatchlistItems() }
+                WatchlistApiServer.start({ watchlistRepository.getCachedItems() }, port)
+            }
         }
 
         // Initialize crash reporting. Sentry is preferred when SENTRY_DSN is configured;

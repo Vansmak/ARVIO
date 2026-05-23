@@ -267,6 +267,7 @@ private class HomeFocusState(
 @Composable
 private fun localizedCategoryTitle(category: Category): String = when (category.id) {
     "continue_watching"        -> stringResource(R.string.continue_watching)
+    "my_watchlist"             -> stringResource(R.string.my_watchlist)
     "trending_movies"          -> stringResource(R.string.trending_movies)
     "trending_series"          -> stringResource(R.string.trending_series)
     "trending_tv"              -> stringResource(R.string.trending_in_shows)

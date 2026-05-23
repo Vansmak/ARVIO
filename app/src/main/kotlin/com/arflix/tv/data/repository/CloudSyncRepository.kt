@@ -30,6 +30,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.max
@@ -48,6 +53,7 @@ import javax.inject.Singleton
 class CloudSyncRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val authRepository: AuthRepository,
+    private val okHttpClient: OkHttpClient,
     private val profileRepository: ProfileRepository,
     private val profileManager: ProfileManager,
     private val catalogRepository: CatalogRepository,
@@ -75,6 +81,61 @@ class CloudSyncRepository @Inject constructor(
         payload.length < 100_000 -> "lt_100kb"
         payload.length < 1_000_000 -> "lt_1mb"
         else -> "gte_1mb"
+    }
+
+    private suspend fun syncServerBaseUrl(): String =
+        context.settingsDataStore.data.first()[SYNC_SERVER_URL_KEY].orEmpty().trim().trimEnd('/')
+
+    private suspend fun syncServerSavePayload(payload: String): Result<Unit> {
+        val base = syncServerBaseUrl()
+        if (base.isBlank()) return Result.failure(IllegalStateException("Sync server URL not configured"))
+        return runCatching {
+            val body = payload.toRequestBody("application/json".toMediaType())
+            val req = Request.Builder().url("$base/api/integration/arvio/settings").put(body).build()
+            okHttpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw IllegalStateException("Sync server PUT failed: ${resp.code}")
+            }
+        }
+    }
+
+    private suspend fun syncServerLoadPayload(): Result<String?> {
+        val base = syncServerBaseUrl()
+        if (base.isBlank()) return Result.failure(IllegalStateException("Sync server URL not configured"))
+        return runCatching {
+            val req = Request.Builder().url("$base/api/integration/arvio/settings").get().build()
+            okHttpClient.newCall(req).execute().use { resp ->
+                if (resp.code == 404) return@runCatching null
+                if (!resp.isSuccessful) throw IllegalStateException("Sync server GET failed: ${resp.code}")
+                resp.body?.string()
+            }
+        }
+    }
+
+    /** Returns true if a sync server URL has been configured. */
+    suspend fun isSyncServerConfigured(): Boolean =
+        syncServerBaseUrl().isNotBlank()
+
+    /**
+     * Verifies [url] is a reachable Arvio-compatible sync server by calling
+     * /api/integration/arvio/status (the Episeerr blueprint status endpoint).
+     * Returns true if the server responds with HTTP 200.
+     */
+    suspend fun verifySyncServer(url: String): Boolean {
+        val base = url.trim().trimEnd('/')
+        if (base.isBlank()) return false
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val req = Request.Builder().url("$base/api/integration/arvio/status").get().build()
+                okHttpClient.newCall(req).execute().use { resp -> resp.isSuccessful }
+            }.getOrDefault(false)
+        }
+    }
+
+    /** Saves [url] as the sync server URL in DataStore. */
+    suspend fun saveSyncServerUrl(url: String) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[SYNC_SERVER_URL_KEY] = url.trim().trimEnd('/')
+        }
     }
 
     private fun mergeAddonsForSharedRestore(addonLists: Iterable<List<Addon>>): List<Addon> {
@@ -414,7 +475,7 @@ class CloudSyncRepository @Inject constructor(
 
         root.put("activeProfileId", profileRepository.getActiveProfileId() ?: JSONObject.NULL)
         root.put("profiles", JSONArray(gson.toJson(profiles)))
-        val existingAvatarImagesById = authRepository.loadAccountSyncPayload()
+        val existingAvatarImagesById = syncServerLoadPayload()
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?.let { payload ->
@@ -553,13 +614,13 @@ class CloudSyncRepository @Inject constructor(
     }
 
     private suspend fun pushToCloudLocked(): Result<Unit> {
-        if (authRepository.getCurrentUserId().isNullOrBlank()) {
+        if (syncServerBaseUrl().isBlank()) {
             AppLogger.breadcrumb(
                 tag = "CloudSync",
-                message = "push_skipped_not_logged_in dirty=$isPushDirty",
+                message = "push_skipped_sync_server_not_configured dirty=$isPushDirty",
                 severity = "warning"
             )
-            return Result.failure(IllegalStateException("Not logged in"))
+            return Result.failure(IllegalStateException("Sync server URL not configured"))
         }
         val payload = runCatching { buildCloudSnapshotJson() }.getOrElse {
             markPushFailedDirty()
@@ -573,7 +634,7 @@ class CloudSyncRepository @Inject constructor(
             )
             return Result.failure(it)
         }
-        val result = authRepository.saveAccountSyncPayload(payload)
+        val result = syncServerSavePayload(payload)
         if (result.isSuccess) {
             clearLocalDirtyAfterSuccessfulPush()
             AppLogger.breadcrumb(
@@ -628,7 +689,7 @@ class CloudSyncRepository @Inject constructor(
             }
         }
 
-        val payloadResult = authRepository.loadAccountSyncPayload()
+        val payloadResult = syncServerLoadPayload()
         if (payloadResult.isFailure) {
             AppLogger.recordException(
                 throwable = payloadResult.exceptionOrNull() ?: IllegalStateException("Cloud pull failed"),
@@ -935,10 +996,7 @@ class CloudSyncRepository @Inject constructor(
         }
         if (preservedNewerLocalSubtitle) {
             markLocalStateDirty()
-        } else {
-            authRepository.saveDefaultSubtitleToProfile(fallbackDefaultSubtitle)
         }
-        authRepository.saveAutoPlayNextToProfile(fallbackAutoPlayNext)
 
         // ── Trakt tokens ──
         root.optJSONObject("traktTokens")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->

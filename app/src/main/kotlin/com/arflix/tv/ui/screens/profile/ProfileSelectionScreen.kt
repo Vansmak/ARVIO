@@ -6,7 +6,6 @@ import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.draw.clip
@@ -21,13 +20,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,7 +58,18 @@ import com.arflix.tv.ui.components.ProfileAvatarVisual
 import com.arflix.tv.ui.components.Toast
 import com.arflix.tv.ui.theme.appBackgroundDark
 import com.arflix.tv.util.LocalDeviceType
+import android.text.InputType
+import android.view.KeyEvent
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.widget.doAfterTextChanged
 import com.arflix.tv.R
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -69,9 +77,7 @@ import com.arflix.tv.R
 fun ProfileSelectionScreen(
     viewModel: ProfileViewModel = hiltViewModel(),
     onProfileSelected: () -> Unit,
-    onShowAddProfile: () -> Unit,
-    onConnectCloud: () -> Unit = {},
-    isCloudConnected: Boolean = false
+    onShowAddProfile: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -268,14 +274,13 @@ fun ProfileSelectionScreen(
                 }
             )
 
-            if (!isCloudConnected) {
+            if (!uiState.isSyncServerConnected) {
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Cloud connect button — focusable on TV, tappable on mobile
-                CloudConnectButton(
+                ConnectServerButton(
                     onClick = {
                         if ((isTouchDevice || isReadyForInput) && !uiState.isSwitchingProfile) {
-                            onConnectCloud()
+                            viewModel.showConnectServerDialog()
                         }
                     }
                 )
@@ -329,6 +334,18 @@ fun ProfileSelectionScreen(
                 onDismiss = { viewModel.hideEditDialog() },
                 onShowPinSetup = { viewModel.showPinSetupDialog() },
                 onRemovePin = { viewModel.removeProfilePin() }
+            )
+        }
+
+        // Connect to Server dialog
+        if (uiState.showConnectServerDialog) {
+            ConnectServerDialog(
+                url = uiState.connectServerUrl,
+                onUrlChange = { viewModel.setConnectServerUrl(it) },
+                isConnecting = uiState.isConnectingToServer,
+                error = uiState.connectServerError,
+                onConnect = { viewModel.connectToServer() },
+                onSkip = { viewModel.dismissConnectServerDialog() }
             )
         }
 
@@ -578,7 +595,7 @@ private fun ManageProfilesButton(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun CloudConnectButton(
+private fun ConnectServerButton(
     onClick: () -> Unit
 ) {
     val isTouchDevice = LocalDeviceType.current.isTouchDevice()
@@ -609,7 +626,7 @@ private fun CloudConnectButton(
                 modifier = Modifier.size(18.dp)
             )
             Text(
-                text = stringResource(R.string.connect_to_cloud),
+                text = stringResource(R.string.connect_to_server),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium,
                 color = Color.White.copy(alpha = 0.85f)
@@ -647,11 +664,231 @@ private fun CloudConnectButton(
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
-                    text = stringResource(R.string.connect_to_cloud),
+                    text = stringResource(R.string.connect_to_server),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = if (isFocused > 0) Color.White else Color.White.copy(alpha = 0.7f)
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun ConnectServerDialog(
+    url: String,
+    onUrlChange: (String) -> Unit,
+    isConnecting: Boolean,
+    error: String?,
+    onConnect: () -> Unit,
+    onSkip: () -> Unit
+) {
+    val isTouchDevice = LocalDeviceType.current.isTouchDevice()
+    var connectFocused by remember { mutableIntStateOf(0) }
+    var skipFocused by remember { mutableIntStateOf(0) }
+    val connectFocusRequester = remember { FocusRequester() }
+    var editTextRef by remember { mutableStateOf<EditText?>(null) }
+
+    // Auto-focus the URL field when the dialog opens
+    LaunchedEffect(Unit) {
+        delay(200)
+        editTextRef?.requestFocus()
+    }
+
+    Dialog(
+        onDismissRequest = onSkip,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.88f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .then(if (isTouchDevice) Modifier.fillMaxWidth(0.9f) else Modifier.wrapContentWidth())
+                    .widthIn(min = 320.dp, max = 520.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF141414))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+                    .padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Dns,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(32.dp)
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "Connect to Server",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = "Enter your sync server URL to restore\nsettings on this device.",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color.White.copy(alpha = 0.55f),
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(22.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFF222222))
+                        .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+                ) {
+                    AndroidView(
+                        factory = { ctx ->
+                            EditText(ctx).apply {
+                                setText(url)
+                                setTextColor(android.graphics.Color.WHITE)
+                                setHintTextColor(android.graphics.Color.parseColor("#777777"))
+                                hint = "http://192.168.1.x:5000"
+                                textSize = 15f
+                                background = null
+                                setPadding(36, 28, 36, 28)
+                                isSingleLine = true
+                                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                                imeOptions = EditorInfo.IME_ACTION_GO
+                                isFocusable = true
+                                isFocusableInTouchMode = true
+                                doAfterTextChanged { onUrlChange(it?.toString() ?: "") }
+                                setOnEditorActionListener { _, actionId, _ ->
+                                    if (actionId == EditorInfo.IME_ACTION_GO) { onConnect(); true } else false
+                                }
+                                // D-pad down escapes the text field and focuses the Connect button
+                                setOnKeyListener { _, keyCode, event ->
+                                    if (event.action == KeyEvent.ACTION_DOWN && keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                                        connectFocusRequester.requestFocus()
+                                        true
+                                    } else false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        update = { et ->
+                            editTextRef = et
+                            if (et.text.toString() != url) { et.setText(url); et.setSelection(url.length) }
+                        }
+                    )
+                }
+
+                if (!error.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = error,
+                        fontSize = 12.sp,
+                        color = Color(0xFFFF6B6B),
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Connect button
+                if (isTouchDevice) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isConnecting) Color.White.copy(alpha = 0.1f) else Color.White.copy(alpha = 0.15f))
+                            .clickable(enabled = !isConnecting) { onConnect() }
+                            .padding(vertical = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (isConnecting) "Connecting…" else "Connect",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isConnecting) Color.White.copy(alpha = 0.4f) else Color.White
+                        )
+                    }
+                } else {
+                    Surface(
+                        onClick = { if (!isConnecting) onConnect() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(connectFocusRequester)
+                            .onFocusChanged { connectFocused = if (it.isFocused) 1 else 0 },
+                        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(8.dp)),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = Color.White.copy(alpha = 0.12f),
+                            focusedContainerColor = Color.White.copy(alpha = 0.25f)
+                        ),
+                        border = ClickableSurfaceDefaults.border(
+                            focusedBorder = androidx.tv.material3.Border(
+                                border = androidx.compose.foundation.BorderStroke(2.dp, Color.White),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 14.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isConnecting) "Connecting…" else "Connect",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isConnecting) Color.White.copy(alpha = 0.4f) else Color.White
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Skip link
+                if (isTouchDevice) {
+                    Text(
+                        text = "Skip — set up manually",
+                        fontSize = 13.sp,
+                        color = Color.White.copy(alpha = 0.4f),
+                        modifier = Modifier
+                            .clickable(enabled = !isConnecting) { onSkip() }
+                            .padding(8.dp)
+                    )
+                } else {
+                    Surface(
+                        onClick = { if (!isConnecting) onSkip() },
+                        modifier = Modifier.onFocusChanged { skipFocused = if (it.isFocused) 1 else 0 },
+                        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(6.dp)),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = Color.Transparent,
+                            focusedContainerColor = Color.White.copy(alpha = 0.06f)
+                        ),
+                        border = ClickableSurfaceDefaults.border(
+                            focusedBorder = androidx.tv.material3.Border(
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.3f)),
+                                shape = RoundedCornerShape(6.dp)
+                            )
+                        )
+                    ) {
+                        Text(
+                            text = "Skip — set up manually",
+                            fontSize = 13.sp,
+                            color = if (skipFocused > 0) Color.White.copy(alpha = 0.7f) else Color.White.copy(alpha = 0.35f),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+                }
             }
         }
     }
