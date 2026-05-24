@@ -299,6 +299,7 @@ class WatchlistRepository @Inject constructor(
         }
 
         saveWatchlist(ordered)
+        pushToEpiseerr(ordered)
 
         // Invalidate enriched cache so the UI picks up the new order on next refresh.
         cacheMutex.withLock {

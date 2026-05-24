@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.9.98] - 2026-05-24
+
+### Fixed
+- Fixed Episeerr watchlist push not firing when watchlist changes come from Trakt sync — Trakt-driven updates now push to Episeerr the same as manual add/remove.
+
 ## [1.9.97] - 2026-05-24
 
 ### Fixed
