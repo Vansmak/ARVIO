@@ -32,7 +32,7 @@ android {
         targetSdk = 35
         versionCode = 283
         versionName = "1.9.96"
-        buildConfigField("String", "GITHUB_OWNER", "\"ProdigyV21\"")
+        buildConfigField("String", "GITHUB_OWNER", "\"Vansmak\"")
         buildConfigField("String", "GITHUB_REPO", "\"ARVIO\"")
 
 
