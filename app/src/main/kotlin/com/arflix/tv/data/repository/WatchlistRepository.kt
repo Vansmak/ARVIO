@@ -502,7 +502,7 @@ class WatchlistRepository @Inject constructor(
             items.forEach { item ->
                 arr.put(JSONObject().apply {
                     put("tmdb_id", item.tmdbId)
-                    put("media_type", item.mediaType)
+                    put("media_type", if (item.mediaType == "tv") "show" else item.mediaType)
                     put("title", item.title)
                     put("poster_path", item.posterPath ?: "")
                     put("year", "")

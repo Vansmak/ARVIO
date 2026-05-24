@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.9.97] - 2026-05-24
+
+### Fixed
+- Fixed Episeerr watchlist push sending wrong media type for TV shows (`tv` → `show`) — shows were being skipped by Episeerr's Sonarr submission and not appearing on the dashboard.
+
 ## [1.9.96] - 2026-05-24
 
 ### Fixed
