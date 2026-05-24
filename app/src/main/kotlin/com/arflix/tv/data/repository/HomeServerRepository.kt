@@ -104,6 +104,22 @@ data class HomeServerCatalogPage(
     val hasMore: Boolean
 )
 
+data class HomeServerResumeItem(
+    val serverItemId: String,
+    val tmdbId: Int,
+    val title: String,
+    val mediaType: com.arflix.tv.data.model.MediaType,
+    val progress: Int,
+    val resumePositionMs: Long,
+    val durationMs: Long,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val episodeTitle: String? = null,
+    val imageUrl: String,
+    val serverName: String,
+    val connectionId: String
+)
+
 internal data class HomeServerCandidateInfo(
     val title: String,
     val productionYear: Int?,
@@ -455,6 +471,20 @@ class HomeServerRepository @Inject constructor(
         runCatching {
             loadConnectionCatalogItems(connection, collectionId, collectionType, offset, limit)
         }.getOrDefault(HomeServerCatalogPage(emptyList(), hasMore = false))
+    }
+
+    suspend fun fetchResumeItems(): List<HomeServerResumeItem> = withContext(Dispatchers.IO) {
+        currentConnections()
+            .filter { it.isUsable }
+            .flatMap { connection ->
+                runCatching {
+                    when (connection.serverKind) {
+                        HomeServerKind.JELLYFIN, HomeServerKind.EMBY -> fetchJellyfinResumeItems(connection)
+                        HomeServerKind.PLEX -> fetchPlexResumeItems(connection)
+                        HomeServerKind.UNKNOWN -> emptyList()
+                    }
+                }.getOrDefault(emptyList())
+            }
     }
 
     suspend fun resolveMovieSources(
@@ -2257,6 +2287,227 @@ class HomeServerRepository @Inject constructor(
         val videoWidth: Int,
         val videoHeight: Int
     )
+
+    private fun fetchJellyfinResumeItems(connection: HomeServerConnection): List<HomeServerResumeItem> {
+        val resumeResponse = getJson(
+            buildUrl(
+                connection.serverUrl,
+                "/Users/${connection.userId}/Items/Resume",
+                mapOf(
+                    "MediaTypes" to "Video",
+                    "Fields" to "ProviderIds,UserData,SeriesInfo,RunTimeTicks,ImageTags",
+                    "Limit" to "20",
+                    "EnableImages" to "true"
+                )
+            ),
+            connection
+        )
+        val rawItems = resumeResponse.itemsArray().mapNotNull { it.asJsonObjectOrNull() }
+        if (rawItems.isEmpty()) return emptyList()
+
+        // Batch-fetch series provider IDs so we can resolve TMDB series IDs for episodes
+        val episodeRawItems = rawItems.filter { it.string("Type").equals("Episode", ignoreCase = true) }
+        val seriesIds = episodeRawItems
+            .mapNotNull { it.string("SeriesId").takeIf { id -> id.isNotBlank() } }
+            .distinct()
+        val seriesTmdbIds: Map<String, Int> = if (seriesIds.isNotEmpty()) {
+            runCatching {
+                val seriesResponse = getJson(
+                    buildUrl(
+                        connection.serverUrl,
+                        "/Users/${connection.userId}/Items",
+                        mapOf("Ids" to seriesIds.joinToString(","), "Fields" to "ProviderIds")
+                    ),
+                    connection
+                )
+                seriesResponse.itemsArray()
+                    .mapNotNull { it.asJsonObjectOrNull() }
+                    .mapNotNull { series ->
+                        val sid = series.string("Id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                        val tmdb = series.obj("ProviderIds")?.string("Tmdb")?.toIntOrNull()
+                            ?: return@mapNotNull null
+                        sid to tmdb
+                    }.toMap()
+            }.getOrDefault(emptyMap())
+        } else emptyMap()
+
+        val serverName = connection.displayName.ifBlank { connection.serverName }.ifBlank { "Home Server" }
+
+        return rawItems.mapNotNull { item ->
+            val type = item.string("Type").lowercase(Locale.US)
+            val mediaType = when (type) {
+                "movie" -> MediaType.MOVIE
+                "episode" -> MediaType.TV
+                else -> return@mapNotNull null
+            }
+            val userData = item.obj("UserData") ?: return@mapNotNull null
+            val positionTicks = userData.long("PlaybackPositionTicks") ?: 0L
+            val positionMs = positionTicks / 10_000L
+            val runTimeTicks = item.long("RunTimeTicks") ?: 0L
+            val durationMs = runTimeTicks / 10_000L
+            if (positionMs <= 0L || durationMs <= 0L) return@mapNotNull null
+            val progress = ((positionMs.toFloat() / durationMs.toFloat()) * 100f).toInt().coerceIn(1, 99)
+
+            val tmdbId: Int
+            val title: String
+            val season: Int?
+            val episode: Int?
+            val episodeTitle: String?
+            val imageItemId: String
+
+            if (mediaType == MediaType.TV) {
+                val seriesId = item.string("SeriesId").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                tmdbId = seriesTmdbIds[seriesId] ?: return@mapNotNull null
+                title = item.string("SeriesName").ifBlank { item.string("Name") }
+                season = item.int("ParentIndexNumber")
+                episode = item.int("IndexNumber")
+                episodeTitle = item.string("Name").takeIf { it.isNotBlank() }
+                imageItemId = seriesId
+            } else {
+                tmdbId = item.obj("ProviderIds")?.string("Tmdb")?.toIntOrNull() ?: return@mapNotNull null
+                title = item.string("Name")
+                season = null
+                episode = null
+                episodeTitle = null
+                imageItemId = item.string("Id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            }
+
+            val imageUrl = buildUrl(
+                connection.serverUrl,
+                "/Items/$imageItemId/Images/Primary",
+                mapOf("api_key" to connection.accessToken, "maxWidth" to "300")
+            )
+            HomeServerResumeItem(
+                serverItemId = item.string("Id"),
+                tmdbId = tmdbId,
+                title = title,
+                mediaType = mediaType,
+                progress = progress,
+                resumePositionMs = positionMs,
+                durationMs = durationMs,
+                season = season,
+                episode = episode,
+                episodeTitle = episodeTitle,
+                imageUrl = imageUrl,
+                serverName = serverName,
+                connectionId = connection.connectionId
+            )
+        }
+    }
+
+    private fun fetchPlexResumeItems(connection: HomeServerConnection): List<HomeServerResumeItem> {
+        val response = getJson(
+            buildUrl(
+                connection.serverUrl,
+                "/hubs/home/onDeck",
+                mapOf("count" to "20", "includeGuids" to "1")
+            ),
+            connection
+        )
+        val serverName = connection.displayName.ifBlank { connection.serverName }.ifBlank { "Home Server" }
+
+        // Collect all metadata items from hubs
+        val allItems = mutableListOf<JsonObject>()
+        response.array("MediaContainer", "Hub").forEach { hub ->
+            hub.asJsonObjectOrNull()?.array("Metadata")?.forEach { meta ->
+                meta.asJsonObjectOrNull()?.let { allItems.add(it) }
+            }
+        }
+        if (allItems.isEmpty()) {
+            response.array("MediaContainer", "Metadata").forEach { meta ->
+                meta.asJsonObjectOrNull()?.let { allItems.add(it) }
+            }
+        }
+
+        // Batch-fetch series GUIDs for TV episodes to resolve the TMDB series ID
+        val episodeItems = allItems.filter { it.string("type").equals("episode", ignoreCase = true) }
+        val grandparentKeys = episodeItems
+            .mapNotNull { it.string("grandparentRatingKey").takeIf { k -> k.isNotBlank() } }
+            .distinct()
+        val seriesTmdbIds: Map<String, Int> = grandparentKeys.mapNotNull { key ->
+            runCatching {
+                val resp = getJson(
+                    buildUrl(connection.serverUrl, "/library/metadata/$key", mapOf("includeGuids" to "1")),
+                    connection
+                )
+                val meta = resp.array("MediaContainer", "Metadata")
+                    .firstOrNull()?.asJsonObjectOrNull() ?: return@runCatching null
+                val guids = parsePlexGuids(meta)
+                val tmdbId = guids["tmdb"]?.toIntOrNull() ?: return@runCatching null
+                key to tmdbId
+            }.getOrNull()
+        }.toMap()
+
+        return allItems.mapNotNull { item ->
+            val type = item.string("type").lowercase(Locale.US)
+            val mediaType = when (type) {
+                "movie" -> MediaType.MOVIE
+                "episode" -> MediaType.TV
+                else -> return@mapNotNull null
+            }
+            val viewOffset = item.long("viewOffset") ?: 0L
+            val duration = item.long("duration") ?: 0L
+            if (viewOffset <= 0L || duration <= 0L) return@mapNotNull null
+            val progress = ((viewOffset.toFloat() / duration.toFloat()) * 100f).toInt().coerceIn(1, 99)
+
+            val tmdbId: Int
+            val title: String
+            val season: Int?
+            val episode: Int?
+            val episodeTitle: String?
+            val thumbPath: String
+
+            if (mediaType == MediaType.TV) {
+                val gpKey = item.string("grandparentRatingKey").takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                tmdbId = seriesTmdbIds[gpKey] ?: return@mapNotNull null
+                title = item.string("grandparentTitle").ifBlank { item.string("title") }
+                season = item.int("parentIndex")
+                episode = item.int("index")
+                episodeTitle = item.string("title").takeIf { it.isNotBlank() }
+                thumbPath = item.string("grandparentThumb").ifBlank { item.string("thumb") }
+            } else {
+                val guids = parsePlexGuids(item)
+                tmdbId = guids["tmdb"]?.toIntOrNull() ?: return@mapNotNull null
+                title = item.string("title")
+                season = null
+                episode = null
+                episodeTitle = null
+                thumbPath = item.string("thumb")
+            }
+            if (thumbPath.isBlank()) return@mapNotNull null
+
+            val imageUrl = buildUrl(
+                connection.serverUrl,
+                thumbPath,
+                mapOf("X-Plex-Token" to connection.accessToken)
+            )
+            HomeServerResumeItem(
+                serverItemId = item.string("ratingKey").ifBlank { item.string("key") },
+                tmdbId = tmdbId,
+                title = title,
+                mediaType = mediaType,
+                progress = progress,
+                resumePositionMs = viewOffset,
+                durationMs = duration,
+                season = season,
+                episode = episode,
+                episodeTitle = episodeTitle,
+                imageUrl = imageUrl,
+                serverName = serverName,
+                connectionId = connection.connectionId
+            )
+        }
+    }
+
+    private fun parsePlexGuids(item: JsonObject): Map<String, String> =
+        item.array("Guid")
+            .mapNotNull { it.asJsonObjectOrNull()?.string("id") }
+            .mapNotNull { guid ->
+                val provider = guid.substringBefore("://").lowercase(Locale.US)
+                val id = guid.substringAfter("://", "").substringBefore("?")
+                provider.takeIf { it.isNotBlank() && id.isNotBlank() }?.let { it to id }
+            }.toMap()
 
 }
 

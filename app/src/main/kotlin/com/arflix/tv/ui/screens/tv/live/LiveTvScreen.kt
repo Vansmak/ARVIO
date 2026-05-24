@@ -606,11 +606,7 @@ fun LiveTvScreen(
                 if (isTouchDevice) onBack()
                 else focusPlaylistSearch()
             }
-            LiveTvFocusZone.CATEGORY_LIST -> {
-                if (isTouchDevice) {
-                    onBack()
-                }
-            }
+            LiveTvFocusZone.CATEGORY_LIST -> onBack()
             LiveTvFocusZone.TOPBAR -> onBack()
         }
     }

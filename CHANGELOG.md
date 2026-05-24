@@ -2,10 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
-## [Unreleased]
+## [1.9.96] - 2026-05-24
+
+### Fixed
+- Fixed TV guide D-pad down being intermittently unresponsive or sticky after navigating into the channel list — pending focus guard is now cleared if all retry attempts fail, and navigation from an unanchored state correctly starts from the first channel.
+- Fixed back button doing nothing when pressed from the TV guide category/search sidebar — now navigates back to home in all cases.
+- Fixed home screen crash on profile selection when a connected Jellyfin or Plex server returns multiple in-progress episodes for the same series — the "Continue on Server" row now deduplicates entries by series so no duplicate LazyList keys are produced.
+- Fixed Trakt device-code auth timing out immediately on transient errors — polling now only stops on permanent OAuth failures (404 invalid code, 409 already used, 410 expired, 418 denied) and continues through network errors, 5xx responses, and other transient conditions.
 
 ### Added
-- (Nothing yet)
+- Watchlist changes (add or remove) on any device now push automatically to Episeerr without requiring a manual force sync.
 
 ## [1.9.92] - 2026-05-11
 

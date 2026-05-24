@@ -903,6 +903,8 @@ class HomeViewModel @Inject constructor(
         refreshContinueWatchingJob?.cancel()
         cwFetchJob?.cancel()
         cwFetchJob = null
+        serverResumeFetchJob?.cancel()
+        serverResumeFetchJob = null
         watchedBadgesJob?.cancel()
         preloadCategoryPriorityJob?.cancel()
         preloadCategoryJobs.values.forEach { it.cancel() }
@@ -1092,6 +1094,7 @@ class HomeViewModel @Inject constructor(
                         resetProfileRuntimeState(profileId)
                         loadHomeData()
                         refreshContinueWatchingOnly(force = true)
+                        launchServerResumeFetch()
                         startEpgRefreshTimer()
                     }
                 }
@@ -1338,6 +1341,7 @@ class HomeViewModel @Inject constructor(
             }
         }
         scheduleInitialHomeLoad()
+        launchServerResumeFetch()
         // Defer heavy background warmups so first-launch navigation remains smooth.
         viewModelScope.launch {
             delay(if (isLowRamDevice) 10 * 60_000L else 8 * 60_000L)
@@ -1548,6 +1552,7 @@ class HomeViewModel @Inject constructor(
     }
 
     private var cwFetchJob: Job? = null
+    private var serverResumeFetchJob: Job? = null
     private val prefetchedDetailsKeys = Collections.synchronizedSet(mutableSetOf<String>())
     private val collectionCatalogByMediaId = ConcurrentHashMap<Int, CatalogConfig>()
 
@@ -1683,6 +1688,55 @@ class HomeViewModel @Inject constructor(
                 current[cwIdx] = continueWatchingCategory
             } else {
                 current.add(0, continueWatchingCategory)
+            }
+            _uiState.value = _uiState.value.copy(categories = current)
+        }
+    }
+
+    private fun launchServerResumeFetch() {
+        serverResumeFetchJob?.cancel()
+        serverResumeFetchJob = viewModelScope.launch(Dispatchers.IO) {
+            val items = runCatching {
+                homeServerRepository.fetchResumeItems()
+            }.getOrDefault(emptyList())
+            val categories = items
+                .groupBy { it.connectionId }
+                .mapNotNull { (_, serverItems) ->
+                    val first = serverItems.first()
+                    val mediaItems = serverItems.map { resumeItem ->
+                        val subtitle = if (resumeItem.season != null && resumeItem.episode != null) {
+                            val ep = "S${resumeItem.season.toString().padStart(2, '0')}E${resumeItem.episode.toString().padStart(2, '0')}"
+                            resumeItem.episodeTitle?.let { "$ep · $it" } ?: ep
+                        } else ""
+                        com.arflix.tv.data.model.MediaItem(
+                            id = resumeItem.tmdbId,
+                            title = resumeItem.title,
+                            subtitle = subtitle,
+                            mediaType = resumeItem.mediaType,
+                            image = resumeItem.imageUrl,
+                            progress = resumeItem.progress,
+                            showPlaybackProgress = true
+                        )
+                    }.distinctBy { "${it.mediaType.name}-${it.id}" }
+                    if (mediaItems.isEmpty()) return@mapNotNull null
+                    Category(
+                        id = "server_resume_${first.connectionId}",
+                        title = "Continue on ${first.serverName}",
+                        items = mediaItems
+                    )
+                }
+            publishServerResume(categories)
+        }
+    }
+
+    private suspend fun publishServerResume(categories: List<Category>) {
+        withContext(Dispatchers.Main) {
+            val current = _uiState.value.categories.toMutableList()
+            current.removeAll { it.id.startsWith("server_resume_") }
+            if (categories.isNotEmpty()) {
+                val cwIdx = current.indexOfFirst { it.id == "continue_watching" }
+                val insertIdx = if (cwIdx >= 0) cwIdx + 1 else 0
+                current.addAll(insertIdx, categories)
             }
             _uiState.value = _uiState.value.copy(categories = current)
         }

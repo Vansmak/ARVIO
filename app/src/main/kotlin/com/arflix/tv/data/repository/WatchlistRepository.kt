@@ -7,8 +7,15 @@ import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.model.MediaType
 import com.arflix.tv.util.AppLogger
 import com.arflix.tv.util.Constants
+import com.arflix.tv.util.settingsDataStore
 import com.arflix.tv.util.traktDataStore
 import com.google.gson.Gson
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +57,8 @@ class WatchlistRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val profileManager: ProfileManager,
     private val tmdbApi: TmdbApi,
-    private val invalidationBus: CloudSyncInvalidationBus
+    private val invalidationBus: CloudSyncInvalidationBus,
+    private val okHttpClient: OkHttpClient
 ) {
     private val gson = Gson()
 
@@ -142,6 +150,9 @@ class WatchlistRepository @Inject constructor(
         // Save to DataStore
         saveWatchlist(existingItems)
 
+        // Push to Episeerr for automatic sync
+        pushToEpiseerr(existingItems)
+
         // Update in-memory cache
         cacheMutex.withLock {
             keyCache.add(key)
@@ -169,6 +180,9 @@ class WatchlistRepository @Inject constructor(
 
         // Save to DataStore
         saveWatchlist(existingItems)
+
+        // Push to Episeerr for automatic sync
+        pushToEpiseerr(existingItems)
 
         // Update in-memory cache
         cacheMutex.withLock {
@@ -477,6 +491,35 @@ class WatchlistRepository @Inject constructor(
             compareBy<MediaItem> { it.sourceOrder }
                 .thenByDescending { it.addedAt }
         )
+    }
+
+    private suspend fun pushToEpiseerr(items: List<LocalWatchlistItem>) = withContext(Dispatchers.IO) {
+        runCatching {
+            val episeerrUrl = context.settingsDataStore.data.first()[EPISEERR_URL_KEY]
+                ?.trim().orEmpty()
+            if (episeerrUrl.isBlank()) return@withContext
+            val arr = JSONArray()
+            items.forEach { item ->
+                arr.put(JSONObject().apply {
+                    put("tmdb_id", item.tmdbId)
+                    put("media_type", item.mediaType)
+                    put("title", item.title)
+                    put("poster_path", item.posterPath ?: "")
+                    put("year", "")
+                })
+            }
+            val body = arr.toString().toRequestBody("application/json".toMediaType())
+            val req = Request.Builder()
+                .url("$episeerrUrl/api/integration/arvio/watchlist/push")
+                .post(body)
+                .build()
+            okHttpClient.newCall(req).execute().close()
+        }.onFailure { e ->
+            AppLogger.recordException(
+                throwable = e,
+                context = mapOf("error_area" to "WatchlistRepository", "phase" to "episeerr_push")
+            )
+        }
     }
 
 }

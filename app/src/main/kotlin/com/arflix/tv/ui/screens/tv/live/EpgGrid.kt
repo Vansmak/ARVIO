@@ -175,6 +175,8 @@ fun EpgGrid(
                 }
                 if (attempt < 3) delay(16L)
             }
+            // All retries exhausted — clear pending so future onFocused calls aren't blocked
+            if (pendingChannelFocusId == channel.id) pendingChannelFocusId = null
         }
         return true
     }
@@ -184,8 +186,12 @@ fun EpgGrid(
         val anchorIdx = anchorId?.let { id -> channels.indexOfFirst { it.id == id } }
             ?.takeIf { it >= 0 }
             ?: channels.indexOfFirst { it.id == selectedChannelId }
-        if (anchorIdx < 0) return true
-        return keepChannelFocus(anchorIdx + delta)
+        // No anchor at all (null selectedChannelId on first entry) — start from first/last
+        val safeIdx = if (anchorIdx < 0) {
+            if (delta > 0) 0 else channels.lastIndex
+        } else anchorIdx
+        if (safeIdx < 0) return true
+        return keepChannelFocus(safeIdx + delta)
     }
 
     // Scroll the grid to the active channel whenever the selection changes

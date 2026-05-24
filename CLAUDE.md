@@ -72,6 +72,14 @@ Watchlist items appear as a browsable row on the home screen.
 ### 9. `serverItemId` on `StreamSource`
 `StreamSource` data class has `serverItemId: String? = null` — populated from the home server item ID in `HomeServerRepository.buildStreamSources()`. Used by `ServerSessionRepository` to report to Jellyfin/Plex.
 
+### 10. Server "Continue on…" Home Rows (`HomeServerRepository.kt`, `HomeViewModel.kt`)
+Each connected home server gets its own "Continue on {ServerName}" row on the home screen, populated from the server's native resume data (not Trakt/local history).
+
+- **Data class:** `HomeServerResumeItem` in `HomeServerRepository.kt`
+- **API:** `HomeServerRepository.fetchResumeItems()` — Jellyfin/Emby uses `GET /Users/{userId}/Items/Resume` + a batch series lookup for TV episodes; Plex uses `GET /hubs/home/onDeck` + per-series GUID lookups for TV episodes
+- **HomeViewModel:** `launchServerResumeFetch()` / `publishServerResume()` — mirrors the CW fetch pattern; row inserted after "Continue Watching", before other rows; restarted on profile switch
+- Items with no resolvable TMDB ID are silently skipped
+
 ## Key Files
 
 | File | Purpose |
@@ -118,17 +126,4 @@ Settings stored at `data/arvio_settings.json` inside the Episeerr working direct
 
 ## TODO
 
-### Home server "Continue Watching" / recently-watched ordering
-When the home screen loads library content from Jellyfin/Plex/Emby, items appear in a default server order that doesn't reflect what the user is actually watching.
-
-**Goal:** Add a "Continue Watching" row (or sort existing rows) using each server's own in-progress tracking — not Trakt, not local history, but the server's native resume data.
-
-**Endpoints:**
-- Jellyfin/Emby: `GET /Users/{userId}/Items/Resume?MediaTypes=Video&Limit=20`
-- Plex: `GET /hubs/home/onDeck` (or per-library `/library/sections/{id}/onDeck`)
-
-**Scope:**
-- New API call in `HomeServerRepository` per server type
-- New home screen row ("Continue on Jellyfin", etc.) populated from resume data
-- Stream sources for those items already work via existing `buildStreamSources()` path
-- Should be per-profile (each profile has its own home server connection)
+### *(no open items)*

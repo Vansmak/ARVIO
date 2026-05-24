@@ -3056,21 +3056,18 @@ class SettingsViewModel @Inject constructor(
                     runCatching { launcherContinueWatchingRepository.refreshForCurrentProfile() }
                     return@launch
                 } catch (e: Exception) {
-                    // Keep polling on 400 (pending) - user hasn't entered code yet
-                    // Check both HttpException code and message for 400
-                    val is400 = when (e) {
-                        is retrofit2.HttpException -> e.code() == 400
-                        else -> e.message?.contains("400") == true ||
-                                e.message?.contains("pending") == true
+                    // 400 = pending (user hasn't entered code yet) — keep polling
+                    // 404 = invalid code, 409 = already used, 410 = expired, 418 = denied — stop
+                    // All other errors (5xx, network, IOException) are transient — keep polling
+                    val isPermanentFailure = when (e) {
+                        is retrofit2.HttpException -> e.code() in setOf(404, 409, 410, 418)
+                        else -> false
                     }
-                    if (!is400) {
-                        lastFailure = when (e) {
-                            is retrofit2.HttpException -> "Trakt authorization failed (${e.code()})"
-                            else -> e.message?.takeIf { it.isNotBlank() } ?: "Trakt authorization failed"
-                        }
+                    if (isPermanentFailure) {
+                        lastFailure = "Trakt authorization failed (${(e as retrofit2.HttpException).code()})"
                         break
                     }
-                    // 400 = pending, continue polling
+                    // 400 = pending, transient errors — continue polling
                 }
             }
 
