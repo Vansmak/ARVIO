@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [1.9.99] - 2026-05-24
+
+### Fixed
+- Fixed Episeerr watchlist push always silently skipping — if only the cloud sync URL was configured (not the separate Episeerr URL field), the push read a blank URL and bailed. Now falls back to the sync server URL.
+
 ## [1.9.98] - 2026-05-24
 
 ### Fixed

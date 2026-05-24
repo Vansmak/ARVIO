@@ -496,8 +496,9 @@ class WatchlistRepository @Inject constructor(
 
     private suspend fun pushToEpiseerr(items: List<LocalWatchlistItem>) = withContext(Dispatchers.IO) {
         runCatching {
-            val episeerrUrl = context.settingsDataStore.data.first()[EPISEERR_URL_KEY]
-                ?.trim().orEmpty()
+            val prefs = context.settingsDataStore.data.first()
+            val episeerrUrl = (prefs[EPISEERR_URL_KEY]?.trim()?.takeIf { it.isNotBlank() }
+                ?: prefs[SYNC_SERVER_URL_KEY]?.trim()).orEmpty()
             if (episeerrUrl.isBlank()) return@withContext
             val arr = JSONArray()
             items.forEach { item ->
