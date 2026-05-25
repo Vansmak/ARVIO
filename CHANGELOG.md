@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.9] - 2026-05-25
+
+### Fixed
+- TV guide now shows "No IPTV playlist configured — go to Settings" when no playlist is set up, instead of the misleading "Loading channels…"
+
 ## [2.0.8] - 2026-05-25
 
 ### Fixed

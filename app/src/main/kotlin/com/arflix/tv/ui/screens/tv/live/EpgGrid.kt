@@ -92,6 +92,7 @@ fun EpgGrid(
     onMoveLeftFromChannels: () -> Unit = {},
     onEnterEpg: (EnrichedChannel) -> Unit = {},
     onExitEpg: (EnrichedChannel?) -> Unit = {},
+    emptyMessage: String = "Loading channels…",
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -366,7 +367,7 @@ fun EpgGrid(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "Loading channels…",
+                            text = emptyMessage,
                             style = LiveType.SectionTag.copy(color = LiveColors.FgMute),
                         )
                     }

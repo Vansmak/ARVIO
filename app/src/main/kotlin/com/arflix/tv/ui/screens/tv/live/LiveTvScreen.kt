@@ -1055,6 +1055,7 @@ fun LiveTvScreen(
                                 focusEpgSignal = focusEpgSignal,
                                 focusMode = if (focusZone == LiveTvFocusZone.EPG) EpgGridFocusMode.Epg else EpgGridFocusMode.ChannelList,
                                 gridFocused = focusZone == LiveTvFocusZone.CHANNEL_LIST || focusZone == LiveTvFocusZone.EPG,
+                                emptyMessage = if (state.isConfigured) "Loading channels…" else "No IPTV playlist configured — go to Settings",
                                 onChannelSelect = { channel, _ ->
                                     pendingPlayChannelId = null
                                     playingChannelId = channel.id
