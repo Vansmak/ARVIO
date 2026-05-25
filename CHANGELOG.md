@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.10] - 2026-05-25
+
+### Fixed
+- Reverted focus changes that broke guide interactivity on Shield/working IPTV setups; kept only the informational empty-state messages
+
 ## [2.0.9] - 2026-05-25
 
 ### Fixed

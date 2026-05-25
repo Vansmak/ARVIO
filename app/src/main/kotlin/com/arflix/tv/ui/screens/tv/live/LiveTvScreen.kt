@@ -653,14 +653,6 @@ fun LiveTvScreen(
             focusChannelList(focusedChannelId ?: filteredChannels.firstOrNull()?.id)
         }
     }
-    // While guide is open but channels haven't loaded yet, keep focus on the fullscreen
-    // box so key events (especially Back) aren't silently dropped.
-    LaunchedEffect(filteredChannels.isEmpty(), isGuideOpen) {
-        if (!isTouchDevice && isGuideOpen && filteredChannels.isEmpty()) {
-            delay(80)
-            runCatching { fsFocus.requestFocus() }
-        }
-    }
 
     BackHandler(enabled = searchOpen) { searchOpen = false }
     BackHandler(enabled = !searchOpen && !isTouchDevice && isGuideOpen) { onBack() }
@@ -945,27 +937,23 @@ fun LiveTvScreen(
                     .focusable()
                     .onPreviewKeyEvent { ev ->
                         if (!isFullScreen || ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        // When the guide is open with channels, let EpgGrid/CategorySidebar handle keys.
-                        // When channels are empty (still loading) we hold focus here so keys aren't dropped.
-                        if (!isTouchDevice && isGuideOpen && filteredChannels.isNotEmpty()) return@onPreviewKeyEvent false
+                        // When the guide is open, let EpgGrid/CategorySidebar handle their own keys.
+                        if (!isTouchDevice && isGuideOpen) return@onPreviewKeyEvent false
                         when (ev.key) {
                             Key.Back, Key.Escape -> {
                                 if (isTouchDevice) { exitFullScreenPlayback(); true } else false
                             }
                             Key.DirectionUp -> {
                                 if (isTouchDevice) { zap(+1); hudPokeSignal++; true }
-                                else if (!isGuideOpen) { openGuide(); true }
-                                else true // guide open but channels loading — consume silently
+                                else { openGuide(); true }
                             }
                             Key.DirectionDown -> {
                                 if (isTouchDevice) { zap(-1); hudPokeSignal++; true }
-                                else if (!isGuideOpen) { openGuide(); true }
-                                else true
+                                else { openGuide(); true }
                             }
                             Key.DirectionCenter, Key.Enter -> {
                                 if (isTouchDevice) { hudPokeSignal++; true }
-                                else if (!isGuideOpen) { openGuide(); true }
-                                else true
+                                else { openGuide(); true }
                             }
                             Key.DirectionLeft, Key.DirectionRight -> { hudPokeSignal++; false }
                             else -> false
