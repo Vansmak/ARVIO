@@ -1430,7 +1430,7 @@ class HomeServerRepository @Inject constructor(
         return if (connection.serverKind == HomeServerKind.PLEX) {
             loadPlexCatalogItems(connection, collectionId, collectionType, offset, limit)
         } else {
-            loadJellyfinCatalogItems(connection, collectionId, offset, limit)
+            loadJellyfinCatalogItems(connection, collectionId, collectionType, offset, limit)
         }
     }
 
@@ -1459,6 +1459,7 @@ class HomeServerRepository @Inject constructor(
                 mapOf(
                     "type" to plexType,
                     "includeGuids" to "1",
+                    "sort" to if (plexType == "2") "episode.addedAt:desc" else "addedAt:desc",
                     "X-Plex-Container-Start" to offset.toString(),
                     "X-Plex-Container-Size" to limit.toString()
                 )
@@ -1480,9 +1481,11 @@ class HomeServerRepository @Inject constructor(
     private fun loadJellyfinCatalogItems(
         connection: HomeServerConnection,
         collectionId: String,
+        collectionType: String,
         offset: Int,
         limit: Int
     ): HomeServerCatalogPage {
+        val isShows = collectionType.lowercase(Locale.US) in setOf("show", "shows", "series", "tvshows")
         val parentId = collectionId.removePrefix("collection:").trim()
         val response = getJson(
             buildUrl(
@@ -1493,8 +1496,8 @@ class HomeServerRepository @Inject constructor(
                     "Recursive" to "true",
                     "IncludeItemTypes" to "Movie,Series",
                     "Fields" to itemFields(),
-                    "SortBy" to "SortName",
-                    "SortOrder" to "Ascending",
+                    "SortBy" to if (isShows) "DateLastContentAdded" else "DateCreated",
+                    "SortOrder" to "Descending",
                     "StartIndex" to offset.toString(),
                     "Limit" to limit.toString()
                 )

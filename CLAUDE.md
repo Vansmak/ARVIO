@@ -124,6 +124,21 @@ Routes:
 
 Settings stored at `data/arvio_settings.json` inside the Episeerr working directory.
 
+## TV Guide Layout (LiveTvScreen.kt)
+
+TV is always fullscreen — video fills the screen, no mini-player. The guide is an overlay:
+
+- **Any key press** (up/down/OK) → guide slides up from bottom (covers 60% of screen height)
+- **Guide closed** → `FullscreenHud` shows channel/program info, auto-hides
+- **Guide open** → channel list + EPG timeline; video visible above the guide
+- **D-pad left** from channel list → category panel slides in from left (`guideGroupsVisible`)
+- **D-pad right** from categories → categories hide, focus returns to channel list
+- **Select channel / Back** → guide closes, video fullscreen again
+
+Touch devices still use the old mini-player + side-by-side EPG layout (`useTouchRail` or `else Row` path).
+
+Key state: `isGuideOpen`, `guideGroupsVisible` in `LiveTvScreen`. Helpers: `openGuide()`, `closeGuide()`.
+
 ## TODO
 
-### *(no open items)*
+- **User-configurable API keys in Settings** — Move TMDB API key and Trakt Client ID/Secret from `BuildConfig` (baked into APK, extractable via decompilation) to user-editable settings stored in DataStore. Add fields to the "accounts" section in SettingsScreen. Fall back to `BuildConfig` values if the user hasn't entered their own. This eliminates the key-in-APK exposure for public repo distributions.

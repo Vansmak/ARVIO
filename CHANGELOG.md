@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.8] - 2026-05-25
+
+### Fixed
+- Fixed TV guide showing blank "CHANNELS 0" and being unresponsive when IPTV channels haven't loaded yet — now shows "Loading channels…" and holds focus so the remote works (Back navigates away)
+
 ## [1.9.99] - 2026-05-24
 
 ### Fixed

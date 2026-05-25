@@ -13,6 +13,10 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.clickable
@@ -42,6 +46,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -166,7 +171,7 @@ fun LiveTvScreen(
             value = System.currentTimeMillis()
         }
     }
-    var selectedCategoryId by rememberSaveable { mutableStateOf("all") }
+    var selectedCategoryId by rememberSaveable { mutableStateOf(if (!isTouchDevice) "favorites" else "all") }
     val recents = remember { mutableStateOf<LinkedHashSet<String>>(LinkedHashSet()) }
     val favSet = remember(state.snapshot.favoriteChannels) { state.snapshot.favoriteChannels.toSet() }
     val hiddenGroupSet = remember(state.snapshot.hiddenGroups) { state.snapshot.hiddenGroups.toSet() }
@@ -260,7 +265,8 @@ fun LiveTvScreen(
         enrichedState.value = current.copy(tree = tree)
     }
     LaunchedEffect(hiddenGroupSet, selectedCategoryId, enrichedState.value.tree) {
-        if (selectedCategoryId != "all" && enrichedState.value.tree.byId(selectedCategoryId) == null) {
+        val builtIn = selectedCategoryId == "all" || selectedCategoryId == "favorites" || selectedCategoryId == "recent"
+        if (!builtIn && enrichedState.value.tree.byId(selectedCategoryId) == null) {
             selectedCategoryId = "all"
         }
     }
@@ -288,11 +294,29 @@ fun LiveTvScreen(
         filteredChannelsState.value = result
     }
     val filteredChannels = filteredChannelsState.value
+    // Fall back to "all" only when preferences have loaded and the user genuinely
+    // has zero favorites — not just because the async filter hasn't run yet.
+    LaunchedEffect(state.iptvPreferencesLoaded, state.snapshot.favoriteChannels.size) {
+        if (!isTouchDevice && state.iptvPreferencesLoaded
+            && selectedCategoryId == "favorites"
+            && state.snapshot.favoriteChannels.isEmpty()
+        ) {
+            selectedCategoryId = "all"
+        }
+    }
 
     // Playing channel — default to the one we were navigated to, else the first
     // channel of the first non-empty category.
     var playingChannelId by rememberSaveable { mutableStateOf<String?>(initialChannelId) }
     var focusedChannelId by rememberSaveable { mutableStateOf<String?>(initialChannelId) }
+    // Debounces channel surfing in the guide — only starts playing after 500ms
+    // of resting on a channel so rapid D-pad presses don't thrash ExoPlayer.
+    var pendingPlayChannelId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingPlayChannelId) {
+        val id = pendingPlayChannelId ?: return@LaunchedEffect
+        delay(500L)
+        if (playingChannelId != id) playingChannelId = id
+    }
     var playingCatchupProgram by remember { mutableStateOf<IptvProgram?>(null) }
     val playingChannel = remember(playingChannelId, enrichedState.value, filteredChannels) {
         playingChannelId?.let { enrichedState.value.index.byId[it] }
@@ -344,7 +368,7 @@ fun LiveTvScreen(
     // the persisted recent channel, then the first filtered entry.
     LaunchedEffect(filteredChannels, playingChannelId, initialChannelId, state.tvSession, state.snapshot.favoriteChannels, enrichedState.value.all.size, state.snapshot.channels.size, state.iptvPreferencesLoaded, state.tvSessionLoaded) {
         val startupStateReady = state.iptvPreferencesLoaded && state.tvSessionLoaded
-        if (playingChannelId == null && filteredChannels.isNotEmpty() && (initialChannelId != null || startupStateReady)) {
+        if (playingChannelId == null && filteredChannels.isNotEmpty() && (initialChannelId != null || (startupStateReady && isTouchDevice))) {
             playingChannelId = chooseStartupChannelId(
                 filteredChannels = filteredChannels,
                 explicitInitialChannelId = initialChannelId,
@@ -366,9 +390,13 @@ fun LiveTvScreen(
     var focusEpgSignal by remember { mutableIntStateOf(0) }
     var focusSearchCategorySignal by remember { mutableIntStateOf(1) }
     val rememberedChannelByCategory = remember { mutableMapOf<String, String>() }
-    // Full-screen playback mode — pressing OK on an EPG row expands the
-    // mini-player to cover the whole screen. Back collapses back to the grid.
-    var isFullScreen by rememberSaveable { mutableStateOf(initialStreamUrl != null) }
+    // TV is always fullscreen (video fills screen, guide is an overlay).
+    // Touch devices use the mini-player layout and can toggle fullscreen.
+    var isFullScreen by rememberSaveable { mutableStateOf(!isTouchDevice || initialStreamUrl != null) }
+    // Guide overlay state — TV only. Guide slides up over the video.
+    var isGuideOpen by rememberSaveable { mutableStateOf(!isTouchDevice) }
+    // Category panel inside the guide — hidden until D-pad left from channel list.
+    var guideGroupsVisible by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(isFullScreen) {
         onFullscreenChanged(isFullScreen)
     }
@@ -449,21 +477,39 @@ fun LiveTvScreen(
         runCatching { epgFocus.requestFocus() }
     }
 
+    fun closeGuide() {
+        pendingPlayChannelId = null
+        isGuideOpen = false
+        guideGroupsVisible = false
+        runCatching { fsFocus.requestFocus() }
+    }
+
+    fun openGuide() {
+        isGuideOpen = true
+        focusChannelList(focusedChannelId ?: playingChannelId)
+    }
+
     fun exitFullScreenPlayback() {
-        isFullScreen = false
-        focusChannelList(playingChannelId ?: focusedChannelId)
+        if (isTouchDevice) {
+            isFullScreen = false
+            focusChannelList(playingChannelId ?: focusedChannelId)
+        } else {
+            closeGuide()
+        }
     }
 
     fun selectChannel(channel: EnrichedChannel) {
         focusedChannelId = channel.id
         rememberedChannelByCategory[selectedCategoryId] = channel.id
-        if (channel.id == playingChannelId && !isFullScreen) {
-            // Second tap on the already-playing channel → fullscreen
+        if (!isTouchDevice) {
+            playingChannelId = channel.id
+            playingCatchupProgram = null
+            closeGuide()
+        } else if (channel.id == playingChannelId && !isFullScreen) {
             playingCatchupProgram = null
             isFullScreen = true
             hudPokeSignal++
         } else {
-            // First tap or different channel → tune in mini-player
             playingChannelId = channel.id
             playingCatchupProgram = null
         }
@@ -474,7 +520,11 @@ fun LiveTvScreen(
         rememberedChannelByCategory[selectedCategoryId] = channel.id
         playingChannelId = channel.id
         playingCatchupProgram = program
-        focusChannelList(channel.id)
+        if (!isTouchDevice) {
+            closeGuide()
+        } else {
+            focusChannelList(channel.id)
+        }
     }
 
     // ExoPlayer lifecycle — mirrors the legacy screen's setup verbatim so live
@@ -588,17 +638,34 @@ fun LiveTvScreen(
         }
     }
 
-    // Default IPTV entry is the playlist/category rail, focused on Search.
+    // Touch: default focus to the category search rail on load.
+    // TV: video plays fullscreen immediately; guide opens on key press.
     LaunchedEffect(enrichedState.value !== EnrichedChannels.Empty) {
-        if (!isTouchDevice && enrichedState.value !== EnrichedChannels.Empty) {
+        if (isTouchDevice && enrichedState.value !== EnrichedChannels.Empty) {
             focusPlaylistSearch()
         }
     }
 
-    BackHandler(enabled = searchOpen) { searchOpen = false }
-    BackHandler(enabled = !searchOpen && isFullScreen) {
-        exitFullScreenPlayback()
+    // When guide starts open by default (TV), focus the channel list as soon as channels arrive.
+    LaunchedEffect(filteredChannels.isNotEmpty()) {
+        if (!isTouchDevice && isGuideOpen && filteredChannels.isNotEmpty()) {
+            delay(80)
+            focusChannelList(focusedChannelId ?: filteredChannels.firstOrNull()?.id)
+        }
     }
+    // While guide is open but channels haven't loaded yet, keep focus on the fullscreen
+    // box so key events (especially Back) aren't silently dropped.
+    LaunchedEffect(filteredChannels.isEmpty(), isGuideOpen) {
+        if (!isTouchDevice && isGuideOpen && filteredChannels.isEmpty()) {
+            delay(80)
+            runCatching { fsFocus.requestFocus() }
+        }
+    }
+
+    BackHandler(enabled = searchOpen) { searchOpen = false }
+    BackHandler(enabled = !searchOpen && !isTouchDevice && isGuideOpen) { onBack() }
+    BackHandler(enabled = !searchOpen && !isTouchDevice && !isGuideOpen) { openGuide() }
+    BackHandler(enabled = !searchOpen && isTouchDevice && isFullScreen) { exitFullScreenPlayback() }
     BackHandler(enabled = !searchOpen && !isFullScreen) {
         when (focusZone) {
             LiveTvFocusZone.EPG -> focusChannelList(focusedChannelId ?: playingChannelId)
@@ -736,6 +803,7 @@ fun LiveTvScreen(
                         onChannelFocused = { channel ->
                             focusedChannelId = channel.id
                             rememberedChannelByCategory[selectedCategoryId] = channel.id
+                            if (!isTouchDevice) playingChannelId = channel.id
                         },
                         onChannelFavoriteToggle = { id -> viewModel.toggleFavoriteChannel(id) },
                         favorites = favSet,
@@ -850,44 +918,55 @@ fun LiveTvScreen(
             }
         }
 
-        // Full-screen playback: same ExoPlayer, covers the entire screen.
-        //
-        // The overlay animates a scale+alpha transition so it looks like the
-        // mini-player is growing into fullscreen. The transform pivot is
-        // roughly the mini-player's center (sidebar ≈ 20% of width, mini-
-        // player sits just below the 52dp top bar), which keeps the grow
-        // anchored visually to where the user tapped instead of from screen
-        // center. fsProgress stays mounted until it reaches 0, so the
-        // reverse animation also plays on Back.
+        // Full-screen playback. Touch: mini-player grows into fullscreen (scale+alpha
+        // animation). TV: always fullscreen — no animation, video fills the screen and
+        // the guide slides up as an overlay.
         val fsProgress by animateFloatAsState(
             targetValue = if (isFullScreen) 1f else 0f,
             animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
             label = "tv-fullscreen-progress",
         )
-        if (fsProgress > 0f && playingChannel != null) {
-            val scale = 0.35f + 0.65f * fsProgress
+        // TV renders the fullscreen Box even before a channel loads so fsFocus is attachable.
+        val showFsBox = if (isTouchDevice) fsProgress > 0f && playingChannel != null
+                        else isFullScreen
+        if (showFsBox) {
+            val scale = if (isTouchDevice) 0.35f + 0.65f * fsProgress else 1f
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer {
-                        transformOrigin = TransformOrigin(
-                            pivotFractionX = 0.22f,
-                            pivotFractionY = 0.18f,
-                        )
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = fsProgress
-                    }
+                    .then(
+                        if (isTouchDevice) Modifier.graphicsLayer {
+                            transformOrigin = TransformOrigin(pivotFractionX = 0.22f, pivotFractionY = 0.18f)
+                            scaleX = scale; scaleY = scale; alpha = fsProgress
+                        } else Modifier
+                    )
                     .background(Color.Black)
                     .focusRequester(fsFocus)
                     .focusable()
                     .onPreviewKeyEvent { ev ->
                         if (!isFullScreen || ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        // When the guide is open with channels, let EpgGrid/CategorySidebar handle keys.
+                        // When channels are empty (still loading) we hold focus here so keys aren't dropped.
+                        if (!isTouchDevice && isGuideOpen && filteredChannels.isNotEmpty()) return@onPreviewKeyEvent false
                         when (ev.key) {
-                            Key.Back, Key.Escape -> { exitFullScreenPlayback(); true }
-                            Key.DirectionUp -> { zap(+1); hudPokeSignal++; true }
-                            Key.DirectionDown -> { zap(-1); hudPokeSignal++; true }
-                            Key.DirectionCenter, Key.Enter -> { hudPokeSignal++; true }
+                            Key.Back, Key.Escape -> {
+                                if (isTouchDevice) { exitFullScreenPlayback(); true } else false
+                            }
+                            Key.DirectionUp -> {
+                                if (isTouchDevice) { zap(+1); hudPokeSignal++; true }
+                                else if (!isGuideOpen) { openGuide(); true }
+                                else true // guide open but channels loading — consume silently
+                            }
+                            Key.DirectionDown -> {
+                                if (isTouchDevice) { zap(-1); hudPokeSignal++; true }
+                                else if (!isGuideOpen) { openGuide(); true }
+                                else true
+                            }
+                            Key.DirectionCenter, Key.Enter -> {
+                                if (isTouchDevice) { hudPokeSignal++; true }
+                                else if (!isGuideOpen) { openGuide(); true }
+                                else true
+                            }
                             Key.DirectionLeft, Key.DirectionRight -> { hudPokeSignal++; false }
                             else -> false
                         }
@@ -897,26 +976,123 @@ fun LiveTvScreen(
                             Modifier.clickable(
                                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                                 indication = null
-                            ) {
-                                hudPokeSignal++
-                            }
-                        } else {
-                            Modifier
-                        }
+                            ) { hudPokeSignal++ }
+                        } else Modifier
                     ),
             ) {
-                androidx.compose.ui.viewinterop.AndroidView(
-                    factory = { ctx ->
-                        androidx.media3.ui.PlayerView(ctx).apply {
-                            player = exoPlayer
-                            useController = false
-                            setKeepContentOnPlayerReset(true)
+                if (playingChannel != null) {
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        factory = { ctx ->
+                            androidx.media3.ui.PlayerView(ctx).apply {
+                                player = exoPlayer
+                                useController = false
+                                setKeepContentOnPlayerReset(true)
+                            }
+                        },
+                        update = { it.player = exoPlayer },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                // TV guide overlay — slides up over the bottom 60% of the screen.
+                // Categories are hidden until the user presses D-pad left from the channel list.
+                if (!isTouchDevice) {
+                    AnimatedVisibility(
+                        visible = isGuideOpen,
+                        enter = slideInVertically(tween(250)) { it } + fadeIn(tween(200)),
+                        exit = slideOutVertically(tween(200)) { it } + fadeOut(tween(150)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.60f)
+                            .align(Alignment.BottomCenter),
+                    ) {
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            AnimatedVisibility(
+                                visible = guideGroupsVisible,
+                                enter = slideInHorizontally(tween(200)) { -it } + fadeIn(tween(200)),
+                                exit = slideOutHorizontally(tween(180)) { -it } + fadeOut(tween(180)),
+                            ) {
+                                CategorySidebar(
+                                    tree = enrichedState.value.tree,
+                                    selectedId = selectedCategoryId,
+                                    expanded = true,
+                                    onSelect = { id -> selectedCategoryId = id },
+                                    onOpenSearch = { searchOpen = true },
+                                    onHideCategory = { groupName ->
+                                        selectedCategoryId = "all"
+                                        viewModel.toggleHiddenGroup(groupName)
+                                    },
+                                    onUnhideCategory = { groupName ->
+                                        viewModel.toggleHiddenGroup(groupName)
+                                    },
+                                    onMoveCategoryUp = { groupName -> viewModel.moveGroupUp(groupName) },
+                                    onMoveCategoryToTop = { groupName -> viewModel.moveGroupToTop(groupName) },
+                                    onMoveCategoryDown = { groupName -> viewModel.moveGroupDown(groupName) },
+                                    onFocusEnter = { focusZone = LiveTvFocusZone.CATEGORY_LIST },
+                                    onMoveRight = {
+                                        guideGroupsVisible = false
+                                        focusChannelList(
+                                            rememberedChannelByCategory[selectedCategoryId]
+                                                ?.takeIf { id -> filteredChannels.any { it.id == id } }
+                                                ?: focusedChannelId?.takeIf { id -> filteredChannels.any { it.id == id } }
+                                                ?: playingChannelId?.takeIf { id -> filteredChannels.any { it.id == id } }
+                                                ?: filteredChannels.firstOrNull()?.id
+                                        )
+                                    },
+                                    onMoveUpFromSearch = {},
+                                    focusSearchSignal = focusSearchCategorySignal,
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .focusRequester(sidebarFocus),
+                                )
+                            }
+                            EpgGrid(
+                                channels = filteredChannels,
+                                clockTickMillis = guideClockMillis,
+                                nowNext = state.snapshot.nowNext,
+                                selectedChannelId = focusedChannelId ?: playingChannelId,
+                                focusSelectedChannelSignal = focusSelectedChannelSignal,
+                                focusEpgSignal = focusEpgSignal,
+                                focusMode = if (focusZone == LiveTvFocusZone.EPG) EpgGridFocusMode.Epg else EpgGridFocusMode.ChannelList,
+                                gridFocused = focusZone == LiveTvFocusZone.CHANNEL_LIST || focusZone == LiveTvFocusZone.EPG,
+                                onChannelSelect = { channel, _ ->
+                                    pendingPlayChannelId = null
+                                    playingChannelId = channel.id
+                                    playingCatchupProgram = null
+                                    focusedChannelId = channel.id
+                                },
+                                onProgramSelect = { channel, program -> playProgramInMini(channel, program) },
+                                onChannelFocused = { channel ->
+                                    focusedChannelId = channel.id
+                                    rememberedChannelByCategory[selectedCategoryId] = channel.id
+                                    pendingPlayChannelId = channel.id
+                                },
+                                onChannelFavoriteToggle = { id -> viewModel.toggleFavoriteChannel(id) },
+                                favorites = favSet,
+                                onMoveLeftFromChannels = {
+                                    guideGroupsVisible = true
+                                    focusZone = LiveTvFocusZone.CATEGORY_LIST
+                                    focusSearchCategorySignal += 1
+                                    runCatching { sidebarFocus.requestFocus() }
+                                },
+                                onEnterEpg = { channel -> focusEpg(channel.id) },
+                                onExitEpg = { channel ->
+                                    focusChannelList(channel?.id ?: focusedChannelId ?: playingChannelId)
+                                },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .onFocusChanged {
+                                        if (it.hasFocus && focusZone == LiveTvFocusZone.CATEGORY_LIST) {
+                                            focusZone = LiveTvFocusZone.CHANNEL_LIST
+                                        }
+                                    }
+                                    .focusRequester(epgFocus),
+                            )
                         }
-                    },
-                    update = { it.player = exoPlayer },
-                    modifier = Modifier.fillMaxSize(),
-                )
-                if (isFullScreen) {
+                    }
+                }
+
+                if (isFullScreen && !isGuideOpen) {
                     FullscreenHud(
                         channel = playingChannel,
                         nowNext = currentNowNext,

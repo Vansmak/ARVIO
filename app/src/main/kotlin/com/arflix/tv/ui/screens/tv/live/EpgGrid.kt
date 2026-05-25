@@ -1,5 +1,6 @@
 package com.arflix.tv.ui.screens.tv.live
 
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -120,8 +121,20 @@ fun EpgGrid(
     }
     val slots = remember(windowStartMillis, slotCount) { buildHalfHourSlots(windowStartMillis, slotCount) }
 
-    // Shared horizontal scroll state between header and body rows.
-    val hScroll = rememberScrollState()
+    // Shared horizontal scroll state — initialised at "now" so programs appear at current time
+    // on first render even when epgReady defers program composition by one frame.
+    val nowScrollPx = with(density) {
+        val nowOffsetMin = ((clockTickMillis - windowStartMillis) / 60_000L).coerceAtLeast(0L).toInt()
+        ((nowOffsetMin * pxPerMin).dp.roundToPx() - 30.dp.roundToPx()).coerceAtLeast(0)
+    }
+    val hScroll = rememberScrollState(initial = nowScrollPx)
+    // Defer EPG program cell composition by one frame so the guide opens without blocking the
+    // main thread — channel list appears instantly, programs render on the next frame.
+    var epgReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        epgReady = true
+    }
     // A single LazyListState handles vertical scrolling for both channels and EPG.
     val channelListState = rememberLazyListState()
     var didPositionInitialSelection by remember(channels) { mutableStateOf(false) }
@@ -347,6 +360,17 @@ fun EpgGrid(
                         true
                     }
             ) {
+                if (channels.isEmpty()) {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Loading channels…",
+                            style = LiveType.SectionTag.copy(color = LiveColors.FgMute),
+                        )
+                    }
+                }
                 LazyColumn(
                     state = channelListState,
                     modifier = Modifier
@@ -426,6 +450,7 @@ fun EpgGrid(
                                     .fillMaxHeight()
                                     .horizontalScroll(hScroll)
                             ) {
+                                if (epgReady) {
                                 val rowPrograms = remember(
                                     ch.id,
                                     nowNext[ch.id],
@@ -468,6 +493,7 @@ fun EpgGrid(
                                     focusRequesters = programFocusRequesters,
                                     focusTargets = programFocusTargets,
                                 )
+                                } // epgReady
                             }
                         }
                     }
