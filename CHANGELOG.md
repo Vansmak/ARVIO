@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.11] - 2026-05-25
+
+### Fixed
+- Restored original side-by-side TV guide layout (CategorySidebar + EpgGrid) — the fullscreen overlay guide introduced in 2.0.8 was the root cause of guide unresponsiveness on Shield and all TV devices with channels configured
+
 ## [2.0.10] - 2026-05-25
 
 ### Fixed
