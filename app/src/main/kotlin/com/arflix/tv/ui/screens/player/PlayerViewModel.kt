@@ -143,7 +143,8 @@ class PlayerViewModel @Inject constructor(
     private val skipIntroRepository: SkipIntroRepository,
     private val playbackTelemetryRepository: PlaybackTelemetryRepository,
     private val progressWebhookRepository: com.arflix.tv.data.repository.ProgressWebhookRepository,
-    private val serverSessionRepository: com.arflix.tv.data.repository.ServerSessionRepository
+    private val serverSessionRepository: com.arflix.tv.data.repository.ServerSessionRepository,
+    private val playerStateHolder: com.arflix.tv.server.PlayerStateHolder,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -393,6 +394,7 @@ class PlayerViewModel @Inject constructor(
             translationManager.isEnabled = false
             translationManager.reset()
 
+            playerStateHolder.reset()
             _uiState.value = PlayerUiState(
                 isLoading = true,
                 isLoadingStreams = true,
@@ -2387,6 +2389,20 @@ class PlayerViewModel @Inject constructor(
 
     fun saveProgress(position: Long, duration: Long, progressPercent: Int, isPlaying: Boolean, playbackState: Int) {
         if (duration <= 0) return
+
+        playerStateHolder.update { s ->
+            s.copy(
+                isPlaying = isPlaying && playbackState != Player.STATE_ENDED,
+                isPaused = !isPlaying,
+                title = currentTitle,
+                episodeTitle = currentEpisodeTitle,
+                overview = _uiState.value.overview,
+                posterUrl = currentPoster,
+                positionMs = position,
+                durationMs = duration,
+                streamUrl = _uiState.value.selectedStreamUrl,
+            )
+        }
 
         // On pause/stop, always save (cancel any in-flight periodic save).
         // During playback, skip if a previous save is still running (debounce).

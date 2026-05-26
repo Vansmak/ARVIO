@@ -33,7 +33,10 @@ import com.arflix.tv.data.repository.WatchlistRepository
 import com.arflix.tv.data.repository.ProfileManager
 import com.arflix.tv.data.repository.WATCHLIST_API_ENABLED_KEY
 import com.arflix.tv.data.repository.WATCHLIST_API_PORT_KEY
-import com.arflix.tv.server.WatchlistApiServer
+import com.arflix.tv.data.repository.USER_TMDB_API_KEY
+import com.arflix.tv.data.repository.USER_TRAKT_CLIENT_ID
+import com.arflix.tv.data.repository.USER_TRAKT_CLIENT_SECRET
+import com.arflix.tv.server.WebAppServer
 import com.arflix.tv.util.AppLogger
 import com.arflix.tv.util.CrashlyticsProvider
 import com.arflix.tv.util.DeviceType
@@ -75,6 +78,8 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
     lateinit var realtimeSyncManager: RealtimeSyncManager
     @Inject
     lateinit var watchlistRepository: WatchlistRepository
+    @Inject
+    lateinit var webAppServer: WebAppServer
 
     override fun onCreate() {
         super.onCreate()
@@ -97,17 +102,22 @@ class ArflixApplication : Application(), Configuration.Provider, ImageLoaderFact
             val savedUserAgent = prefs[uaKey].orEmpty()
             OkHttpProvider.setCustomUserAgent(savedUserAgent)
 
+            OkHttpProvider.setUserApiKeys(
+                tmdbKey       = prefs[USER_TMDB_API_KEY].orEmpty(),
+                traktClientId = prefs[USER_TRAKT_CLIENT_ID].orEmpty(),
+                traktClientSecret = prefs[USER_TRAKT_CLIENT_SECRET].orEmpty(),
+            )
+
             runCatching { OkHttpProvider.dns.lookup("image.tmdb.org") }
         }
 
-        // Start watchlist API server if enabled
+        // Start web app server if enabled
         appScope.launch(Dispatchers.IO) {
             val prefs = settingsDataStore.data.first()
             if (prefs[WATCHLIST_API_ENABLED_KEY] == true) {
-                val port = prefs[WATCHLIST_API_PORT_KEY]?.toIntOrNull() ?: WatchlistApiServer.DEFAULT_PORT
-                // Ensure watchlist cache is primed before serving
+                val port = prefs[WATCHLIST_API_PORT_KEY]?.toIntOrNull() ?: WebAppServer.DEFAULT_PORT
                 runCatching { watchlistRepository.getWatchlistItems() }
-                WatchlistApiServer.start({ watchlistRepository.getCachedItems() }, port)
+                webAppServer.start(port)
             }
         }
 

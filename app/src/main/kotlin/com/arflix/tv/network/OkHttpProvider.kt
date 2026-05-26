@@ -97,6 +97,20 @@ object OkHttpProvider {
         return _customUserAgent.ifBlank { defaultUserAgent }
     }
 
+    @Volatile private var _userTmdbApiKey: String = ""
+    @Volatile private var _userTraktClientId: String = ""
+    @Volatile private var _userTraktClientSecret: String = ""
+
+    val userTmdbApiKey: String get() = _userTmdbApiKey
+    val userTraktClientId: String get() = _userTraktClientId
+    val userTraktClientSecret: String get() = _userTraktClientSecret
+
+    fun setUserApiKeys(tmdbKey: String, traktClientId: String, traktClientSecret: String) {
+        _userTmdbApiKey = tmdbKey.trim()
+        _userTraktClientId = traktClientId.trim()
+        _userTraktClientSecret = traktClientSecret.trim()
+    }
+
     private val dnsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val clientLock = Any()
 

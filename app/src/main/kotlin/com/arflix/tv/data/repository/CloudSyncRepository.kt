@@ -8,6 +8,9 @@ import com.arflix.tv.data.model.Addon
 import com.arflix.tv.data.model.CatalogConfig
 import com.arflix.tv.data.model.Profile
 import com.arflix.tv.data.repository.ContinueWatchingItem
+import com.arflix.tv.data.repository.USER_TMDB_API_KEY
+import com.arflix.tv.data.repository.USER_TRAKT_CLIENT_ID
+import com.arflix.tv.data.repository.USER_TRAKT_CLIENT_SECRET
 import com.arflix.tv.network.OkHttpProvider
 import com.arflix.tv.ui.components.CARD_LAYOUT_MODE_LANDSCAPE
 import com.arflix.tv.ui.components.catalogueRowLayoutKeyFromPreferenceName
@@ -1000,6 +1003,19 @@ class CloudSyncRepository @Inject constructor(
         }
         if (preservedNewerLocalSubtitle) {
             markLocalStateDirty()
+        }
+
+        // ── User API keys (synced from server, override BuildConfig) ──
+        val tmdbKey         = root.optString("tmdb_api_key", "")
+        val traktClientId   = root.optString("trakt_client_id", "")
+        val traktClientSecret = root.optString("trakt_client_secret", "")
+        if (tmdbKey.isNotBlank() || traktClientId.isNotBlank() || traktClientSecret.isNotBlank()) {
+            context.settingsDataStore.edit { prefs ->
+                if (tmdbKey.isNotBlank())         prefs[USER_TMDB_API_KEY]         = tmdbKey
+                if (traktClientId.isNotBlank())   prefs[USER_TRAKT_CLIENT_ID]      = traktClientId
+                if (traktClientSecret.isNotBlank()) prefs[USER_TRAKT_CLIENT_SECRET] = traktClientSecret
+            }
+            OkHttpProvider.setUserApiKeys(tmdbKey, traktClientId, traktClientSecret)
         }
 
         // ── Trakt tokens ──

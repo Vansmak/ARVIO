@@ -205,8 +205,10 @@ data class SettingsUiState(
     val webhookIntervalSeconds: Int = 30,
     // Watchlist API server
     val watchlistApiEnabled: Boolean = false,
-    val watchlistApiPort: Int = com.arflix.tv.server.WatchlistApiServer.DEFAULT_PORT,
-    // Episeerr base URL — used for watchlist polling + settings sync
+    val watchlistApiPort: Int = com.arflix.tv.server.WebAppServer.DEFAULT_PORT,
+    // Arvio sync server URL — arvio-server instance for full settings sync
+    val syncServerUrl: String = "",
+    // Episeerr base URL — used for Sonarr/Radarr watchlist integration
     val episeerrUrl: String = "",
     val episeerrBackupTimestamp: String? = null,
     val isRestoringFromEpiseerr: Boolean = false,
@@ -234,7 +236,8 @@ class SettingsViewModel @Inject constructor(
     private val appUpdateRepository: AppUpdateRepository,
     private val updatePreferences: UpdatePreferences,
     private val apkDownloader: ApkDownloader,
-    private val updateStatusManager: com.arflix.tv.updater.UpdateStatusManager
+    private val updateStatusManager: com.arflix.tv.updater.UpdateStatusManager,
+    private val webAppServer: com.arflix.tv.server.WebAppServer,
 ) : ViewModel() {
     private fun visibleCatalogs(catalogs: List<CatalogConfig>): List<CatalogConfig> {
         return catalogs.filter { config ->
@@ -480,10 +483,11 @@ class SettingsViewModel @Inject constructor(
             val webhookEnabled = prefs[webhookEnabledKey] ?: false
             val webhookUrl = prefs[webhookUrlKey].orEmpty().trim()
             val webhookIntervalSeconds = prefs[webhookIntervalKey]?.toIntOrNull() ?: 30
+            val syncServerUrl = prefs[com.arflix.tv.data.repository.SYNC_SERVER_URL_KEY].orEmpty().trim()
             val episeerrUrl = prefs[episeerrUrlKey].orEmpty().trim()
             val episeerrBackupTimestampRaw = prefs[episeerrBackupTimestampKey]
             val watchlistApiEnabled = prefs[watchlistApiEnabledKey] ?: false
-            val watchlistApiPort = prefs[watchlistApiPortKey]?.toIntOrNull() ?: com.arflix.tv.server.WatchlistApiServer.DEFAULT_PORT
+            val watchlistApiPort = prefs[watchlistApiPortKey]?.toIntOrNull() ?: com.arflix.tv.server.WebAppServer.DEFAULT_PORT
 
             // Check auth statuses
             val authState = authRepository.authState.first()
@@ -555,6 +559,7 @@ class SettingsViewModel @Inject constructor(
                 webhookIntervalSeconds = webhookIntervalSeconds,
                 watchlistApiEnabled = watchlistApiEnabled,
                 watchlistApiPort = watchlistApiPort,
+                syncServerUrl = syncServerUrl,
                 episeerrUrl = episeerrUrl,
                 episeerrBackupTimestamp = if (episeerrBackupTimestampRaw != null) formatSyncTime(episeerrBackupTimestampRaw) else null,
                 isEpiseerrInstalled = _uiState.value.addons.any { it.id == "episeerr" && it.isEnabled }
@@ -1274,6 +1279,13 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun saveSyncServerUrl(url: String) {
+        viewModelScope.launch {
+            cloudSyncRepository.saveSyncServerUrl(url.trim())
+            _uiState.value = _uiState.value.copy(syncServerUrl = url.trim())
+        }
+    }
+
     fun saveEpiseerrUrl(url: String) {
         viewModelScope.launch {
             context.settingsDataStore.edit { it[episeerrUrlKey] = url.trim() }
@@ -1287,13 +1299,9 @@ class SettingsViewModel @Inject constructor(
             context.settingsDataStore.edit { it[watchlistApiEnabledKey] = enabled }
             _uiState.value = _uiState.value.copy(watchlistApiEnabled = enabled)
             if (enabled) {
-                val port = _uiState.value.watchlistApiPort
-                com.arflix.tv.server.WatchlistApiServer.start(
-                    { watchlistRepository.getCachedItems() },
-                    port
-                )
+                webAppServer.start(_uiState.value.watchlistApiPort)
             } else {
-                com.arflix.tv.server.WatchlistApiServer.stop()
+                webAppServer.stop()
             }
             backupSettingsToEpiseerr()
         }
@@ -1305,10 +1313,7 @@ class SettingsViewModel @Inject constructor(
             context.settingsDataStore.edit { it[watchlistApiPortKey] = clamped.toString() }
             _uiState.value = _uiState.value.copy(watchlistApiPort = clamped)
             if (_uiState.value.watchlistApiEnabled) {
-                com.arflix.tv.server.WatchlistApiServer.start(
-                    { watchlistRepository.getCachedItems() },
-                    clamped
-                )
+                webAppServer.start(clamped)
             }
             backupSettingsToEpiseerr()
         }
@@ -1408,7 +1413,7 @@ class SettingsViewModel @Inject constructor(
                     setWatchlistApiEnabled(true)
                 }
                 val port = backup.optInt("watchlist_port", 0)
-                if (port > 0 && s.watchlistApiPort == com.arflix.tv.server.WatchlistApiServer.DEFAULT_PORT) {
+                if (port > 0 && s.watchlistApiPort == com.arflix.tv.server.WebAppServer.DEFAULT_PORT) {
                     saveWatchlistApiPort(port)
                 }
                 _uiState.value = _uiState.value.copy(

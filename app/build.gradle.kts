@@ -299,7 +299,7 @@ dependencies {
 
     baselineProfile(project(":benchmark"))
 
-    // NanoHTTPD – lightweight HTTP server for QR-based AI key setup
+    // NanoHTTPD – lightweight HTTP server for QR-based AI key setup and web UI
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // Unit Testing

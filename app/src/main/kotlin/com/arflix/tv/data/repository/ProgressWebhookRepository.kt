@@ -25,6 +25,9 @@ val EPISEERR_URL_KEY = stringPreferencesKey("episeerr_url")
 // Separate from EPISEERR_URL_KEY, which is for the Episeerr media-management addon.
 // They may point at the same host in a typical self-hosted setup.
 val SYNC_SERVER_URL_KEY = stringPreferencesKey("sync_server_url")
+val USER_TMDB_API_KEY = stringPreferencesKey("user_tmdb_api_key")
+val USER_TRAKT_CLIENT_ID = stringPreferencesKey("user_trakt_client_id")
+val USER_TRAKT_CLIENT_SECRET = stringPreferencesKey("user_trakt_client_secret")
 
 @Singleton
 class ProgressWebhookRepository @Inject constructor(

@@ -5,6 +5,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
+import com.arflix.tv.network.OkHttpProvider
 
 /**
  * Intercepts API calls to TMDB and Trakt and routes them through Supabase Edge Functions.
@@ -22,12 +23,16 @@ class ApiProxyInterceptor : Interceptor {
 
         return when (originalUrl.host) {
             "api.themoviedb.org" -> {
-                // Call TMDB directly — api_key is already on the request from BuildConfig.TMDB_API_KEY
-                chain.proceed(originalRequest)
+                // User-configured key (synced from server) takes priority over BuildConfig fallback
+                val key = OkHttpProvider.userTmdbApiKey.ifBlank { Constants.TMDB_API_KEY }
+                if (key.isBlank()) return chain.proceed(originalRequest)
+                val newUrl = originalRequest.url.newBuilder()
+                    .setQueryParameter("api_key", key)
+                    .build()
+                chain.proceed(originalRequest.newBuilder().url(newUrl).build())
             }
             "api.trakt.tv" -> {
-                // Call Trakt directly — add required API headers (replaces any already set by Retrofit)
-                val clientId = Constants.TRAKT_CLIENT_ID
+                val clientId = OkHttpProvider.userTraktClientId.ifBlank { Constants.TRAKT_CLIENT_ID }
                 val enriched = if (clientId.isNotBlank()) {
                     originalRequest.newBuilder()
                         .header("trakt-api-key", clientId)
