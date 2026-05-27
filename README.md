@@ -6,18 +6,25 @@ The app provides a media browser, player shell, profile support, optional cloud 
 
 ## Fork additions (Vansmak/ARVIO)
 
-This fork replaces ARVIO Cloud (Supabase) with self-hosted settings sync and adds optional [Episeerr](https://github.com/Vansmak/episeerr) integration for media management.
+This fork replaces ARVIO Cloud (Supabase) with self-hosted settings sync and a plugin model for third-party integrations.
 
-**Self-hosted sync** — settings, profiles, addons, IPTV, home server connections, and watchlist are synced to a server you control. No cloud account required. See [sync-server/](sync-server/) for a minimal Docker container, or use Episeerr if you already run it.
+**Self-hosted sync** — settings, profiles, addons, IPTV, home server connections, and watchlist are synced to a server you control. No cloud account required. See [sync-server/](sync-server/) for a minimal Docker container, or use [arvio-server](sync-server/) — a full LAN web UI for first-time setup — on port 7979.
 
-**New device setup:** tap **Connect to Server** on the profile screen, enter your server URL, and all settings are restored in one step.
+**New device setup:** tap **Connect to Server** on the profile screen, enter your server URL, and all settings are restored in one step. Or open the arvio-server web UI from a browser and configure everything there first.
 
-**Episeerr integration** (optional, separate from sync):
-- Playback webhooks — posts start/pause/stop/progress events to Episeerr
-- LAN watchlist server — serves watchlist as JSON on port 7979
-- Sonarr/Radarr sync via the Episeerr addon in Plugins & Extensions
+**Plugin model** — third-party integrations are added via URL in Settings → Plugins & Extensions, the same as addon sources. The app auto-detects supported plugins and shows their settings inline. No dedicated settings sections needed. See [docs/plugins.md](docs/plugins.md) for supported plugins.
 
-**Direct API calls** — TMDB and Trakt are called directly with your own API keys. The Supabase Edge Function proxy is no longer used.
+**Episeerr plugin** (optional) — add Episeerr by URL to get:
+- Playback webhooks (start/pause/stop/progress events)
+- LAN watchlist server (JSON on a configurable port, default 7979)
+- Sonarr/Radarr watchlist sync via Episeerr
+
+**Integration settings** (always in Plugins & Extensions, no plugin required):
+- Progress webhook — URL, toggle, fire interval
+- Watchlist API — toggle, port
+- Watched threshold — configurable 50–99%
+
+**Direct API calls** — TMDB and Trakt are called directly with your own API keys (entered in Settings). The Supabase Edge Function proxy is no longer used.
 
 ---
 

@@ -14,14 +14,17 @@
 
 ## First-Time Setup
 
+The fastest path is to restore from a sync server (arvio-server or Episeerr). This pulls all settings, sources, addons, and playlists in one step.
+
 1. **Create a profile** — on the profiles screen, add a name and optionally a PIN.
-2. **Restore from server** (if you have a sync server or Episeerr):
-   - Go to Settings → User Info & Account → Connect to Server.
-   - Enter your server URL and select **Restore**. All settings, playlists, and catalog connections are pulled down in one step.
+2. **Restore from server** (if you have one running):
+   - Go to Settings → User Info & Account → **Connect to Server**.
+   - Enter your server URL (e.g. `http://192.168.1.x:7979`) and select **Restore**.
+   - All settings, playlists, and catalog connections are pulled down immediately.
 3. **Add sources manually** if not restoring:
    - **IPTV**: Settings → Plugins & Extensions → add your M3U or Xtream URL.
    - **Home servers**: Settings → Sources → add Jellyfin, Emby, or Plex URL.
-   - **Addons**: Settings → Plugins & Extensions → paste an addon manifest URL.
+   - **Addons**: Settings → Plugins & Extensions → paste an addon or plugin URL.
 
 ---
 
@@ -110,15 +113,18 @@ Access settings from the left sidebar on the home screen or TV screen.
 ### Key sections
 
 **User Info & Account**
-- Connect to your sync server or Episeerr instance.
-- Restore or save your full settings blob.
+- Connect to your sync server — enter its URL to restore all settings to a new device.
 - Trakt.tv login for watchlist and continue-watching sync.
+- Force sync — push local state to your server and pull the latest.
 
 **Plugins & Extensions**
 - Add / remove M3U and Xtream IPTV playlists.
-- Add / remove addon manifest URLs.
-- Progress webhook — enable to POST playback events to a URL (e.g. Episeerr).
-- Watchlist API — serves your watchlist as JSON on a LAN port (default 7979) so Episeerr can poll it.
+- Add / remove third-party addon sources by URL.
+- Add integration plugins (e.g. Episeerr) by URL — the app auto-detects supported plugins and shows their settings inline.
+- **Integration settings** (always visible at the bottom of this section):
+  - Progress Webhook — toggle on/off, set URL, set fire interval
+  - Watchlist API — toggle the LAN JSON server on/off, set port
+  - Watched Threshold — percentage at which playback counts as "watched" (50–99%)
 
 **Sources**
 - Add Jellyfin, Emby, or Plex server connections.
@@ -129,14 +135,11 @@ Access settings from the left sidebar on the home screen or TV screen.
 
 ---
 
-## Episeerr Integration
+## Plugins
 
-If you run [Episeerr](https://github.com/Vansmak/episeerr):
+ARVIO supports integration plugins added via URL — the same field used for addon sources. When you add a supported plugin URL, the app detects it and shows that plugin's settings inline in its card.
 
-1. Settings → User Info & Account → **Episeerr URL** — enter your Episeerr base URL (e.g. `http://192.168.1.x:5000`).
-2. Enable **Progress Webhook** in Plugins & Extensions and set the webhook URL to `{episeerr_url}/api/integration/arvio/webhook`.
-3. Enable **Watchlist API** — Episeerr polls `http://{tv-ip}:7979/watchlist` to sync your watchlist to Sonarr/Radarr automatically.
-4. Use **Restore from Episeerr** in User Info & Account to pull your saved settings to a new device.
+Each plugin has its own setup guide. See [`docs/plugins.md`](docs/plugins.md) for the full list.
 
 ---
 

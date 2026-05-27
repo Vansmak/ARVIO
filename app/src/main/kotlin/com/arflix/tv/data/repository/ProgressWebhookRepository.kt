@@ -18,6 +18,7 @@ import javax.inject.Singleton
 val WEBHOOK_ENABLED_KEY = booleanPreferencesKey("webhook_enabled")
 val WEBHOOK_URL_KEY = stringPreferencesKey("webhook_url")
 val WEBHOOK_INTERVAL_KEY = stringPreferencesKey("webhook_interval_seconds")
+val WEBHOOK_COMPLETION_PERCENT_KEY = stringPreferencesKey("webhook_completion_percent")
 val WATCHLIST_API_ENABLED_KEY = booleanPreferencesKey("watchlist_api_enabled")
 val WATCHLIST_API_PORT_KEY = stringPreferencesKey("watchlist_api_port")
 val EPISEERR_URL_KEY = stringPreferencesKey("episeerr_url")

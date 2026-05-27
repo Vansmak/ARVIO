@@ -344,6 +344,7 @@ fun SettingsScreen(
     var showCustomUserAgentDialog by remember { mutableStateOf(false) }
     var showWebhookUrlDialog by remember { mutableStateOf(false) }
     var showWatchlistApiPortDialog by remember { mutableStateOf(false) }
+    var showWebhookCompletionDialog by remember { mutableStateOf(false) }
     var showSyncServerUrlDialog by remember { mutableStateOf(false) }
     var showEpiseerrUrlDialog by remember { mutableStateOf(false) }
     var qualityFilterRegexPattern by remember { mutableStateOf("") }
@@ -381,8 +382,8 @@ fun SettingsScreen(
             "iptv" -> 2 + uiState.iptvPlaylists.size // Add + rows + refresh + clear
             "home_server" -> uiState.homeServerConnections.size + 3
             "catalogs" -> uiState.catalogs.size // Add + rows
-            "stremio" -> stremioAddons.size + if (uiState.isEpiseerrInstalled) 5 else 0 // addons + add button [+ episeerr rows when installed]
-            "accounts" -> if (uiState.isEpiseerrInstalled) 6 else 4 // base rows [+ episeerr rows when installed]
+            "stremio" -> stremioAddons.size + 6 // addons + add button + 6 integration settings
+            "accounts" -> 4
             else -> 0
         }
     }
@@ -614,6 +615,7 @@ fun SettingsScreen(
         showCustomUserAgentDialog ||
         showWebhookUrlDialog ||
         showWatchlistApiPortDialog ||
+        showWebhookCompletionDialog ||
         showSyncServerUrlDialog ||
         showEpiseerrUrlDialog ||
         uiState.aiKeyServerState.isActive ||
@@ -946,6 +948,7 @@ fun SettingsScreen(
                                                 contentFocusIndex == stremioAddons.size + 3 -> viewModel.cycleWebhookInterval()
                                                 contentFocusIndex == stremioAddons.size + 4 -> viewModel.setWatchlistApiEnabled(!uiState.watchlistApiEnabled)
                                                 contentFocusIndex == stremioAddons.size + 5 -> showWatchlistApiPortDialog = true
+                                                contentFocusIndex == stremioAddons.size + 6 -> showWebhookCompletionDialog = true
                                             }
                                         }
                                         "accounts" -> {
@@ -970,8 +973,6 @@ fun SettingsScreen(
                                                     }
                                                 }
                                                 3 -> showSyncServerUrlDialog = true
-                                                5 -> showEpiseerrUrlDialog = true
-                                                6 -> viewModel.restoreFromEpiseerr()
                                             }
                                         }
                                         else -> Unit
@@ -1029,6 +1030,7 @@ fun SettingsScreen(
                 openCustomUserAgentDialog = { showCustomUserAgentDialog = true },
                 onShowWebhookUrlDialog = { showWebhookUrlDialog = true },
                 onShowWatchlistApiPortDialog = { showWatchlistApiPortDialog = true },
+                onShowWebhookCompletionDialog = { showWebhookCompletionDialog = true },
                 onShowSyncServerUrlDialog = { showSyncServerUrlDialog = true },
                 onShowEpiseerrUrlDialog = { showEpiseerrUrlDialog = true }
             )
@@ -1353,20 +1355,21 @@ fun SettingsScreen(
                             addons = stremioAddons,
                             focusedIndex = if (activeZone == Zone.CONTENT) contentFocusIndex else -1,
                             focusedActionIndex = addonActionIndex,
-                            episeerrInstalled = uiState.isEpiseerrInstalled,
+                            onToggleAddon = { viewModel.toggleAddon(it) },
+                            onDeleteAddon = { viewModel.removeAddon(it) },
+                            onAddCustomAddon = { showCustomAddonInput = true },
                             webhookEnabled = uiState.webhookEnabled,
                             webhookUrl = uiState.webhookUrl,
                             webhookIntervalSeconds = uiState.webhookIntervalSeconds,
                             watchlistApiEnabled = uiState.watchlistApiEnabled,
                             watchlistApiPort = uiState.watchlistApiPort,
-                            onToggleAddon = { viewModel.toggleAddon(it) },
-                            onDeleteAddon = { viewModel.removeAddon(it) },
-                            onAddCustomAddon = { showCustomAddonInput = true },
-                            onWebhookEnabledToggle = { viewModel.setWebhookEnabled(it) },
+                            webhookCompletionPercent = uiState.webhookCompletionPercent,
+                            onToggleWebhook = { viewModel.setWebhookEnabled(!uiState.webhookEnabled) },
                             onWebhookUrlClick = { showWebhookUrlDialog = true },
-                            onWebhookIntervalClick = { viewModel.cycleWebhookInterval() },
-                            onWatchlistApiEnabledToggle = { viewModel.setWatchlistApiEnabled(it) },
-                            onWatchlistApiPortClick = { showWatchlistApiPortDialog = true }
+                            onCycleInterval = { viewModel.cycleWebhookInterval() },
+                            onToggleWatchlistApi = { viewModel.setWatchlistApiEnabled(!uiState.watchlistApiEnabled) },
+                            onWatchlistPortClick = { showWatchlistApiPortDialog = true },
+                            onCompletionPercentClick = { showWebhookCompletionDialog = true }
                         )
                         "accounts" -> AccountsSettings(
                             isTraktAuthenticated = uiState.isTraktAuthenticated,
@@ -1387,13 +1390,7 @@ fun SettingsScreen(
                             onInstallUpdate = { viewModel.installAppUpdateOrRequestPermission() },
                             onOpenDataDeletion = { openExternalUrl(context, ACCOUNT_DELETION_URL) },
                             syncServerUrl = uiState.syncServerUrl,
-                            onSyncServerUrlClick = { showSyncServerUrlDialog = true },
-                            episeerrInstalled = uiState.isEpiseerrInstalled,
-                            episeerrUrl = uiState.episeerrUrl,
-                            episeerrBackupTimestamp = uiState.episeerrBackupTimestamp,
-                            isRestoringFromEpiseerr = uiState.isRestoringFromEpiseerr,
-                            onEpiseerrUrlClick = { showEpiseerrUrlDialog = true },
-                            onRestoreFromEpiseerr = { viewModel.restoreFromEpiseerr() }
+                            onSyncServerUrlClick = { showSyncServerUrlDialog = true }
                         )
                     }
                   }
@@ -1409,6 +1406,17 @@ fun SettingsScreen(
                     showWebhookUrlDialog = false
                 },
                 onDismiss = { showWebhookUrlDialog = false }
+            )
+        }
+
+        if (showWebhookCompletionDialog) {
+            WebhookCompletionPercentDialog(
+                currentValue = uiState.webhookCompletionPercent,
+                onSave = { pct ->
+                    viewModel.saveWebhookCompletionPercent(pct)
+                    showWebhookCompletionDialog = false
+                },
+                onDismiss = { showWebhookCompletionDialog = false }
             )
         }
 
@@ -1825,6 +1833,17 @@ fun SettingsScreen(
                     showWatchlistApiPortDialog = false
                 },
                 onDismiss = { showWatchlistApiPortDialog = false }
+            )
+        }
+
+        if (isTouchDevice && showWebhookCompletionDialog) {
+            WebhookCompletionPercentDialog(
+                currentValue = uiState.webhookCompletionPercent,
+                onSave = { pct ->
+                    viewModel.saveWebhookCompletionPercent(pct)
+                    showWebhookCompletionDialog = false
+                },
+                onDismiss = { showWebhookCompletionDialog = false }
             )
         }
 
@@ -3128,6 +3147,7 @@ private fun MobileSettingsLayout(
     openCustomUserAgentDialog: () -> Unit = {},
     onShowWebhookUrlDialog: () -> Unit = {},
     onShowWatchlistApiPortDialog: () -> Unit = {},
+    onShowWebhookCompletionDialog: () -> Unit = {},
     onShowSyncServerUrlDialog: () -> Unit = {},
     onShowEpiseerrUrlDialog: () -> Unit = {}
 ) {
@@ -3217,7 +3237,8 @@ private fun MobileSettingsLayout(
                 onAddCustomAddonClick = onAddCustomAddonClick,
                 openCustomUserAgentDialog = openCustomUserAgentDialog,
                 onShowWebhookUrlDialog = onShowWebhookUrlDialog,
-                onShowWatchlistApiPortDialog = onShowWatchlistApiPortDialog
+                onShowWatchlistApiPortDialog = onShowWatchlistApiPortDialog,
+                onShowWebhookCompletionDialog = onShowWebhookCompletionDialog
             )
         }
     }
@@ -3401,7 +3422,8 @@ private fun MobileSettingsSubPage(
     onAddCustomAddonClick: () -> Unit,
     openCustomUserAgentDialog: () -> Unit = {},
     onShowWebhookUrlDialog: () -> Unit = {},
-    onShowWatchlistApiPortDialog: () -> Unit = {}
+    onShowWatchlistApiPortDialog: () -> Unit = {},
+    onShowWebhookCompletionDialog: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
     Column(
@@ -3685,20 +3707,21 @@ private fun MobileSettingsSubPage(
                     addons = stremioAddons,
                     focusedIndex = -1,
                     focusedActionIndex = 0,
-                    episeerrInstalled = uiState.isEpiseerrInstalled,
+                    onToggleAddon = { viewModel.toggleAddon(it) },
+                    onDeleteAddon = { viewModel.removeAddon(it) },
+                    onAddCustomAddon = onAddCustomAddonClick,
                     webhookEnabled = uiState.webhookEnabled,
                     webhookUrl = uiState.webhookUrl,
                     webhookIntervalSeconds = uiState.webhookIntervalSeconds,
                     watchlistApiEnabled = uiState.watchlistApiEnabled,
                     watchlistApiPort = uiState.watchlistApiPort,
-                    onToggleAddon = { viewModel.toggleAddon(it) },
-                    onDeleteAddon = { viewModel.removeAddon(it) },
-                    onAddCustomAddon = onAddCustomAddonClick,
-                    onWebhookEnabledToggle = { viewModel.setWebhookEnabled(it) },
+                    webhookCompletionPercent = uiState.webhookCompletionPercent,
+                    onToggleWebhook = { viewModel.setWebhookEnabled(!uiState.webhookEnabled) },
                     onWebhookUrlClick = onShowWebhookUrlDialog,
-                    onWebhookIntervalClick = { viewModel.cycleWebhookInterval() },
-                    onWatchlistApiEnabledToggle = { viewModel.setWatchlistApiEnabled(it) },
-                    onWatchlistApiPortClick = onShowWatchlistApiPortDialog
+                    onCycleInterval = { viewModel.cycleWebhookInterval() },
+                    onToggleWatchlistApi = { viewModel.setWatchlistApiEnabled(!uiState.watchlistApiEnabled) },
+                    onWatchlistPortClick = onShowWatchlistApiPortDialog,
+                    onCompletionPercentClick = onShowWebhookCompletionDialog
                 )
             }
             "Catalogs" -> {
@@ -4286,7 +4309,7 @@ private fun tvSettingsSectionDescription(section: String): String {
         "iptv" -> "Live TV playlists, EPG refresh, channel loading and playlist management."
         "home_server" -> "Connect personal media servers and use their libraries as sources."
         "catalogs" -> "Discover, rename, order and remove home rows and list catalogs."
-        "stremio" -> "Manage third-party addons, progress webhook and watchlist API for external tools."
+        "stremio" -> "Manage third-party addon sources."
         "accounts" -> "Cloud sync, Trakt, Episeerr integration, app updates and account controls."
         else -> "Configure ARVIO for this profile."
     }
@@ -7256,20 +7279,21 @@ private fun StremioAddonsSettings(
     addons: List<com.arflix.tv.data.model.Addon> = emptyList(),
     focusedIndex: Int = -1,
     focusedActionIndex: Int = 0,
-    episeerrInstalled: Boolean = false,
+    onToggleAddon: (String) -> Unit = {},
+    onDeleteAddon: (String) -> Unit = {},
+    onAddCustomAddon: () -> Unit = {},
     webhookEnabled: Boolean = false,
     webhookUrl: String = "",
     webhookIntervalSeconds: Int = 30,
     watchlistApiEnabled: Boolean = false,
-    watchlistApiPort: Int = 7979,
-    onToggleAddon: (String) -> Unit = {},
-    onDeleteAddon: (String) -> Unit = {},
-    onAddCustomAddon: () -> Unit = {},
-    onWebhookEnabledToggle: (Boolean) -> Unit = {},
+    watchlistApiPort: Int = com.arflix.tv.server.WebAppServer.DEFAULT_PORT,
+    webhookCompletionPercent: Int = 90,
+    onToggleWebhook: () -> Unit = {},
     onWebhookUrlClick: () -> Unit = {},
-    onWebhookIntervalClick: () -> Unit = {},
-    onWatchlistApiEnabledToggle: (Boolean) -> Unit = {},
-    onWatchlistApiPortClick: () -> Unit = {}
+    onCycleInterval: () -> Unit = {},
+    onToggleWatchlistApi: () -> Unit = {},
+    onWatchlistPortClick: () -> Unit = {},
+    onCompletionPercentClick: () -> Unit = {}
 ) {
     Column {
         Text(
@@ -7338,62 +7362,85 @@ private fun StremioAddonsSettings(
             )
         }
 
-        if (episeerrInstalled) {
-            Spacer(modifier = Modifier.height(28.dp))
-            Text(
-                text = "EPISEERR INTEGRATION",
-                style = ArflixTypography.caption.copy(fontSize = 12.sp, letterSpacing = 1.sp),
-                color = TextSecondary,
-                modifier = Modifier.padding(bottom = 10.dp)
-            )
-            SettingsToggleRow(
-                title = "Progress Webhook",
-                subtitle = "POST playback events to a custom URL",
-                isEnabled = webhookEnabled,
-                isFocused = focusedIndex == addons.size + 1,
-                onToggle = onWebhookEnabledToggle,
-                modifier = Modifier.settingsFocusSlot(addons.size + 1)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            SettingsRow(
-                icon = Icons.Default.Link,
-                title = "Webhook URL",
-                subtitle = "Endpoint that receives progress events",
-                value = if (webhookUrl.isBlank()) "Not set" else "Set",
-                isFocused = focusedIndex == addons.size + 2,
-                onClick = onWebhookUrlClick,
-                modifier = Modifier.settingsFocusSlot(addons.size + 2)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            SettingsRow(
-                icon = Icons.Default.Schedule,
-                title = "Webhook Interval",
-                subtitle = "How often progress events fire during playback",
-                value = "${webhookIntervalSeconds}s",
-                isFocused = focusedIndex == addons.size + 3,
-                onClick = onWebhookIntervalClick,
-                modifier = Modifier.settingsFocusSlot(addons.size + 3)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            SettingsToggleRow(
-                title = "Watchlist API",
-                subtitle = "Serve watchlist over LAN so Episeerr can poll it",
-                isEnabled = watchlistApiEnabled,
-                isFocused = focusedIndex == addons.size + 4,
-                onToggle = onWatchlistApiEnabledToggle,
-                modifier = Modifier.settingsFocusSlot(addons.size + 4)
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            SettingsRow(
-                icon = Icons.Default.Link,
-                title = "Watchlist API Port",
-                subtitle = "Port for GET /watchlist endpoint (default ${com.arflix.tv.server.WebAppServer.DEFAULT_PORT})",
-                value = watchlistApiPort.toString(),
-                isFocused = focusedIndex == addons.size + 5,
-                onClick = onWatchlistApiPortClick,
-                modifier = Modifier.settingsFocusSlot(addons.size + 5)
-            )
-        }
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "INTEGRATION SETTINGS",
+            style = ArflixTypography.caption.copy(fontSize = 12.sp, letterSpacing = 1.sp),
+            color = TextSecondary,
+            modifier = Modifier.padding(bottom = 10.dp)
+        )
+
+        SettingsRow(
+            icon = Icons.Default.Sync,
+            title = "Progress Webhook",
+            subtitle = "POST playback events to a URL",
+            value = if (webhookEnabled) "On" else "Off",
+            isFocused = focusedIndex == addons.size + 1,
+            onClick = onToggleWebhook,
+            modifier = Modifier.settingsFocusSlot(addons.size + 1)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsRow(
+            icon = Icons.Default.Link,
+            title = "Webhook URL",
+            subtitle = if (webhookUrl.isBlank()) "Not set" else webhookUrl,
+            value = if (webhookUrl.isBlank()) "Set" else "",
+            isFocused = focusedIndex == addons.size + 2,
+            onClick = onWebhookUrlClick,
+            modifier = Modifier.settingsFocusSlot(addons.size + 2)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsRow(
+            icon = Icons.Default.Schedule,
+            title = "Webhook Interval",
+            subtitle = "How often to fire progress events",
+            value = "${webhookIntervalSeconds}s",
+            isFocused = focusedIndex == addons.size + 3,
+            onClick = onCycleInterval,
+            modifier = Modifier.settingsFocusSlot(addons.size + 3)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsRow(
+            icon = Icons.Default.Cloud,
+            title = "Watchlist API",
+            subtitle = "Serve watchlist JSON over LAN",
+            value = if (watchlistApiEnabled) "On :${watchlistApiPort}" else "Off",
+            isFocused = focusedIndex == addons.size + 4,
+            onClick = onToggleWatchlistApi,
+            modifier = Modifier.settingsFocusSlot(addons.size + 4)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsRow(
+            icon = Icons.Default.Settings,
+            title = "Watchlist API Port",
+            subtitle = "Port for the LAN watchlist server",
+            value = watchlistApiPort.toString(),
+            isFocused = focusedIndex == addons.size + 5,
+            onClick = onWatchlistPortClick,
+            modifier = Modifier.settingsFocusSlot(addons.size + 5)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        SettingsRow(
+            icon = Icons.Default.CheckCircle,
+            title = "Watched Threshold",
+            subtitle = "Mark as watched at this progress %",
+            value = "${webhookCompletionPercent}%",
+            isFocused = focusedIndex == addons.size + 6,
+            onClick = onCompletionPercentClick,
+            modifier = Modifier.settingsFocusSlot(addons.size + 6)
+        )
+
     }
 }
 
@@ -7585,13 +7632,7 @@ private fun AccountsSettings(
     onInstallUpdate: () -> Unit,
     onOpenDataDeletion: () -> Unit,
     syncServerUrl: String = "",
-    onSyncServerUrlClick: () -> Unit = {},
-    episeerrInstalled: Boolean = false,
-    episeerrUrl: String = "",
-    episeerrBackupTimestamp: String? = null,
-    isRestoringFromEpiseerr: Boolean = false,
-    onEpiseerrUrlClick: () -> Unit = {},
-    onRestoreFromEpiseerr: () -> Unit = {}
+    onSyncServerUrlClick: () -> Unit = {}
 ) {
     Column {
         Text(
@@ -7680,36 +7721,6 @@ private fun AccountsSettings(
             modifier = Modifier.settingsFocusSlot(4)
         )
 
-        if (episeerrInstalled) {
-            Spacer(modifier = Modifier.height(28.dp))
-            Text(
-                text = "EPISEERR",
-                style = ArflixTypography.caption.copy(fontSize = 12.sp, letterSpacing = 1.sp),
-                color = TextSecondary,
-                modifier = Modifier.padding(bottom = 10.dp)
-            )
-
-            SettingsRow(
-                icon = Icons.Default.Link,
-                title = "Episeerr URL",
-                subtitle = "Base URL for Sonarr/Radarr watchlist integration",
-                value = if (episeerrUrl.isBlank()) "Not set" else "Set",
-                isFocused = focusedIndex == 5,
-                onClick = onEpiseerrUrlClick,
-                modifier = Modifier.settingsFocusSlot(5)
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            SettingsActionRow(
-                title = "Restore from Episeerr",
-                description = if (episeerrBackupTimestamp != null) "Last backup: $episeerrBackupTimestamp" else "Restore integration settings from Episeerr backup",
-                actionLabel = if (isRestoringFromEpiseerr) "..." else "RESTORE",
-                isFocused = focusedIndex == 6,
-                onClick = { if (!isRestoringFromEpiseerr) onRestoreFromEpiseerr() },
-                modifier = Modifier.settingsFocusSlot(6)
-            )
-        }
     }
 }
 
@@ -9149,6 +9160,86 @@ private fun WatchlistApiPortDialog(
                         }
                     ) {
                         Text("Save", color = TextPrimary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WebhookCompletionPercentDialog(
+    currentValue: Int,
+    onSave: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isMobile = LocalDeviceType.current.isTouchDevice()
+    var value by remember(currentValue) { mutableStateOf(currentValue.toString()) }
+    val inputFocusRequester = remember { FocusRequester() }
+    BackHandler { onDismiss() }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
+        inputFocusRequester.requestFocus()
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .then(
+                    if (isMobile) Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    else Modifier.width(360.dp)
+                )
+                .clip(RoundedCornerShape(16.dp))
+                .background(BackgroundElevated)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
+                Text(text = "Watched Threshold", style = ArflixTypography.sectionTitle, color = TextPrimary)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Mark item as watched when playback reaches this percentage (50–99%).",
+                    style = ArflixTypography.caption,
+                    color = TextSecondary
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it.filter { c -> c.isDigit() }.take(2) },
+                    placeholder = { Text("90") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                        imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                    ),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                        onDone = {
+                            val pct = value.toIntOrNull()?.coerceIn(50, 99) ?: 90
+                            onSave(pct)
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth().focusRequester(inputFocusRequester),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Pink,
+                        unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f),
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        cursorColor = TextPrimary
+                    )
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    androidx.compose.material3.TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = TextSecondary)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            val pct = value.toIntOrNull()?.coerceIn(50, 99) ?: 90
+                            onSave(pct)
+                        }
+                    ) {
+                        Text("Save", color = Pink)
                     }
                 }
             }

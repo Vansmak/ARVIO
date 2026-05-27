@@ -206,6 +206,7 @@ data class SettingsUiState(
     // Watchlist API server
     val watchlistApiEnabled: Boolean = false,
     val watchlistApiPort: Int = com.arflix.tv.server.WebAppServer.DEFAULT_PORT,
+    val webhookCompletionPercent: Int = 90,
     // Arvio sync server URL — arvio-server instance for full settings sync
     val syncServerUrl: String = "",
     // Episeerr base URL — used for Sonarr/Radarr watchlist integration
@@ -303,6 +304,7 @@ class SettingsViewModel @Inject constructor(
     private val webhookEnabledKey = com.arflix.tv.data.repository.WEBHOOK_ENABLED_KEY
     private val webhookUrlKey = com.arflix.tv.data.repository.WEBHOOK_URL_KEY
     private val webhookIntervalKey = com.arflix.tv.data.repository.WEBHOOK_INTERVAL_KEY
+    private val webhookCompletionPercentKey = com.arflix.tv.data.repository.WEBHOOK_COMPLETION_PERCENT_KEY
     private val episeerrUrlKey = com.arflix.tv.data.repository.EPISEERR_URL_KEY
     private val episeerrBackupTimestampKey = stringPreferencesKey("episeerr_backup_timestamp")
     private val watchlistApiEnabledKey = com.arflix.tv.data.repository.WATCHLIST_API_ENABLED_KEY
@@ -488,6 +490,7 @@ class SettingsViewModel @Inject constructor(
             val episeerrBackupTimestampRaw = prefs[episeerrBackupTimestampKey]
             val watchlistApiEnabled = prefs[watchlistApiEnabledKey] ?: false
             val watchlistApiPort = prefs[watchlistApiPortKey]?.toIntOrNull() ?: com.arflix.tv.server.WebAppServer.DEFAULT_PORT
+            val webhookCompletionPercent = prefs[webhookCompletionPercentKey]?.toIntOrNull()?.coerceIn(50, 99) ?: 90
 
             // Check auth statuses
             val authState = authRepository.authState.first()
@@ -559,6 +562,7 @@ class SettingsViewModel @Inject constructor(
                 webhookIntervalSeconds = webhookIntervalSeconds,
                 watchlistApiEnabled = watchlistApiEnabled,
                 watchlistApiPort = watchlistApiPort,
+                webhookCompletionPercent = webhookCompletionPercent,
                 syncServerUrl = syncServerUrl,
                 episeerrUrl = episeerrUrl,
                 episeerrBackupTimestamp = if (episeerrBackupTimestampRaw != null) formatSyncTime(episeerrBackupTimestampRaw) else null,
@@ -1315,6 +1319,15 @@ class SettingsViewModel @Inject constructor(
             if (_uiState.value.watchlistApiEnabled) {
                 webAppServer.start(clamped)
             }
+            backupSettingsToEpiseerr()
+        }
+    }
+
+    fun saveWebhookCompletionPercent(percent: Int) {
+        val clamped = percent.coerceIn(50, 99)
+        viewModelScope.launch {
+            context.settingsDataStore.edit { it[webhookCompletionPercentKey] = clamped.toString() }
+            _uiState.value = _uiState.value.copy(webhookCompletionPercent = clamped)
             backupSettingsToEpiseerr()
         }
     }

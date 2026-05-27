@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.12] - 2026-05-26
+
+### Changed
+- Integration settings (progress webhook toggle, URL, interval; watchlist API toggle, port; watched threshold) moved to **Plugins & Extensions** — always visible, no longer gated on Episeerr being installed
+- Episeerr is now added as a standard plugin via addon URL (e.g. `http://ip:5002`) — arvio-server auto-detects it and pre-fills webhook/watchlist settings automatically
+- Removed dedicated "Episeerr URL" and "Restore from Episeerr" rows from User Info & Account
+- Web UI: Episeerr plugin card shows its 6 integration settings inline when added
+- arvio-server web UI `saveSettings()` now only pushes flat setting keys — no longer risks overwriting addon or profile data on save
+- Jellyfin server display name now fetched from `/System/Info/Public` for accurate naming
+
+### Added
+- **Watched threshold** is now user-configurable (50–99%) from both the TV app and web UI, replacing the hardcoded 90% value
+- Settings round-trip: TV app now exports integration settings (webhook URL/enabled/interval, watchlist port/enabled, Episeerr URL, completion %) back to the server on sync push, so they survive a full pull-push cycle
+
 ## [2.0.11] - 2026-05-25
 
 ### Fixed

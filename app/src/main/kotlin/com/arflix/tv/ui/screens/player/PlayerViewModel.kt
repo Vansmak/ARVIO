@@ -2584,7 +2584,11 @@ class PlayerViewModel @Inject constructor(
             }
 
             // Mark as watched when playback ends or crosses threshold
-            if (!hasMarkedWatched && (playbackState == Player.STATE_ENDED || progressPercent >= Constants.WATCHED_THRESHOLD)) {
+            val watchedThreshold = runCatching {
+                context.settingsDataStore.data.first()[com.arflix.tv.data.repository.WEBHOOK_COMPLETION_PERCENT_KEY]
+                    ?.toIntOrNull()?.coerceIn(50, 99)
+            }.getOrNull() ?: Constants.WATCHED_THRESHOLD
+            if (!hasMarkedWatched && (playbackState == Player.STATE_ENDED || progressPercent >= watchedThreshold)) {
                 hasMarkedWatched = true
                 try {
                     traktRepository.scrobbleStop(
