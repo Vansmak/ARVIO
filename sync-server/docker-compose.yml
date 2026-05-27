@@ -1,11 +1,13 @@
 services:
-  arvio-sync:
+  arvio-server:
     build: .
-    ports:
-      - "7000:7000"      # change the left side if 7000 is taken on your host
-    volumes:
-      - ./data:/data     # settings stored in ./data/arvio_settings.json
+    container_name: arvio-server
     restart: unless-stopped
+    ports:
+      - "${PORT:-7979}:7979"
+    volumes:
+      - ./data:/data
     environment:
-      - PORT=7000
-      - DATA_FILE=/data/arvio_settings.json
+      - PORT=7979
+      # Optional: set TMDB_API_KEY here or configure it via the web dashboard
+      # - TMDB_API_KEY=your_key_here

@@ -1,7 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
+
 WORKDIR /app
-RUN pip install --no-cache-dir flask gunicorn
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY server.py .
+COPY web/ ./web/
+
+ENV DATA_DIR=/data
+ENV PORT=7979
+
 VOLUME ["/data"]
-EXPOSE 7000
-CMD ["gunicorn", "--bind", "0.0.0.0:7000", "--workers", "2", "server:app"]
+EXPOSE 7979
+
+CMD ["gunicorn", "--bind", "0.0.0.0:7979", "--workers", "2", "--threads", "4", "--timeout", "120", "server:app"]
