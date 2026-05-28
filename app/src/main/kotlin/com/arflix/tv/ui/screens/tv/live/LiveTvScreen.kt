@@ -62,19 +62,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.datasource.okhttp.OkHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.arflix.tv.data.model.IptvChannel
 import com.arflix.tv.data.model.IptvProgram
 import com.arflix.tv.data.model.Profile
 import com.arflix.tv.ui.screens.tv.TvUiState
 import com.arflix.tv.ui.screens.tv.TvViewModel
-import com.arflix.tv.network.OkHttpProvider
 import com.arflix.tv.ui.components.AppTopBar
 import com.arflix.tv.ui.components.AppTopBarHeight
 import com.arflix.tv.ui.components.SidebarItem
@@ -88,9 +83,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.ConnectionPool
-import okhttp3.OkHttpClient
-import java.util.concurrent.TimeUnit
 
 private enum class LiveTvFocusZone {
     TOPBAR,
@@ -136,6 +128,7 @@ private fun chooseStartupChannelId(
 @Composable
 fun LiveTvScreen(
     viewModel: TvViewModel = hiltViewModel(),
+    playerViewModel: LiveTvPlayerViewModel,
     currentProfile: Profile? = null,
     initialChannelId: String? = null,
     initialStreamUrl: String? = null,
@@ -494,51 +487,23 @@ fun LiveTvScreen(
         focusChannelList(channel.id)
     }
 
-    // ExoPlayer lifecycle — mirrors the legacy screen's setup verbatim so live
-    // IPTV behaviour (buffer, retries, chunkless HLS) stays identical.
-    val iptvHttpClient = remember {
-        OkHttpClient.Builder()
-            .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .retryOnConnectionFailure(true)
-            .dns(OkHttpProvider.dns)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(300, TimeUnit.SECONDS)
-            .build()
-    }
-    val mediaSourceFactory = remember(iptvHttpClient) {
-        DefaultMediaSourceFactory(context)
-            .setDataSourceFactory(
-                OkHttpDataSource.Factory(iptvHttpClient)
-                    .setUserAgent("ARVIO/1.2.0 (Android TV)")
-            )
-    }
-    val exoPlayer = remember {
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(4_000, 20_000, 750, 1_500)
-            .setTargetBufferBytes(24 * 1024 * 1024)
-            .setPrioritizeTimeOverSizeThresholds(true)
-            .setBackBuffer(2_000, false)
-            .build()
-        ExoPlayer.Builder(context)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .setLoadControl(loadControl)
-            .build().apply {
-                playWhenReady = true
-                videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
-            }
-    }
-
-    DisposableEffect(Unit) { onDispose { exoPlayer.release() } }
+    // ExoPlayer lives in playerViewModel (activity-scoped) so it survives navigation.
+    // The player config (OkHttp, load control) is set up once in LiveTvPlayerViewModel.
+    val exoPlayer = playerViewModel.player
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, ev ->
             when (ev) {
-                Lifecycle.Event.ON_PAUSE -> exoPlayer.pause()
+                // Do NOT pause on screen-level PAUSE — player should keep playing
+                // in the mini-player overlay while the user navigates other screens.
+                // Process-level backgrounding is handled by LiveTvPlayerViewModel's
+                // ProcessLifecycleOwner observer.
                 Lifecycle.Event.ON_RESUME -> {
-                    if (playingChannelId != null) exoPlayer.play()
+                    // Resume if the ViewModel still has an active stream
+                    if (playingChannelId != null && playerViewModel.state.value.isActive) {
+                        exoPlayer.play()
+                    }
                     if (currentUiState.isConfigured &&
                         currentUiState.snapshot.channels.isNotEmpty() &&
                         viewModel.iptvRepository.cachedEpgAgeMs() > 90_000L
@@ -573,6 +538,17 @@ fun LiveTvScreen(
     }
     LaunchedEffect(currentStreamUrl, playingCatchupProgram) {
         val stream = currentStreamUrl ?: return@LaunchedEffect
+
+        // If this exact URL is already playing in the ViewModel (e.g. user returned
+        // from another screen), skip re-setup to avoid interrupting playback.
+        if (stream == playerViewModel.state.value.streamUrl && exoPlayer.isPlaying) {
+            playerViewModel.updateNowPlaying(
+                channelName = playingChannel?.name.orEmpty(),
+                programTitle = currentNowNext?.now?.title.orEmpty(),
+            )
+            return@LaunchedEffect
+        }
+
         delay(90L)
         exoPlayer.setMediaItem(
             MediaItem.Builder()
@@ -601,6 +577,24 @@ fun LiveTvScreen(
                 lastGroupName = selectedCategoryId,
                 lastFocusedZone = "GUIDE",
                 markOpened = true,
+            )
+            // Tell the ViewModel which channel/stream is active so the mini-player
+            // overlay can show the right info when the user navigates away.
+            playerViewModel.setActiveChannel(
+                channelId = id,
+                streamUrl = stream,
+                channelName = playingChannel?.name.orEmpty(),
+                programTitle = currentNowNext?.now?.title.orEmpty(),
+            )
+        }
+    }
+
+    // Keep mini-player metadata in sync with EPG changes while on this screen.
+    LaunchedEffect(currentNowNext?.now?.title, playingChannel?.name) {
+        if (playerViewModel.state.value.isActive && playingChannelId != null) {
+            playerViewModel.updateNowPlaying(
+                channelName = playingChannel?.name.orEmpty(),
+                programTitle = currentNowNext?.now?.title.orEmpty(),
             )
         }
     }

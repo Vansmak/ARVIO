@@ -105,6 +105,15 @@ import com.arflix.tv.data.repository.WatchlistRepository
 import com.arflix.tv.data.repository.toLauncherContinueWatchingRequest
 import com.arflix.tv.navigation.AppNavigation
 import com.arflix.tv.navigation.Screen
+import com.arflix.tv.ui.screens.tv.live.LiveTvMiniPlayerOverlay
+import com.arflix.tv.ui.screens.tv.live.LiveTvPlayerViewModel
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.ui.graphics.TransformOrigin
 import com.arflix.tv.ui.screens.login.LoginScreen
 import com.arflix.tv.ui.startup.StartupViewModel
 import com.arflix.tv.ui.theme.ArflixTvTheme
@@ -552,6 +561,10 @@ fun ArflixApp(
         return
     }
 
+    // Activity-scoped — survives all navigation changes. Created here (above NavHost)
+    // so hiltViewModel() uses the Activity's ViewModelStoreOwner.
+    val liveTvPlayerViewModel: LiveTvPlayerViewModel = hiltViewModel()
+
     val navController = rememberNavController()
     val appCoroutineScope = androidx.compose.runtime.rememberCoroutineScope()
     var lastAddonsSyncKey by remember { mutableStateOf<String?>(null) }
@@ -625,6 +638,7 @@ fun ArflixApp(
                 preloadedHeroLogoUrl = preloadedHeroLogoUrl,
                 preloadedLogoCache = preloadedLogoCache,
                 currentProfile = activeProfile,
+                liveTvPlayerViewModel = liveTvPlayerViewModel,
                 onSwitchProfile = {
                     appCoroutineScope.launch {
                         traktRepository.clearAllProfileCaches()
@@ -640,6 +654,42 @@ fun ArflixApp(
                     iptvFullscreen = fullscreen
                 },
                 onExitApp = onExitApp
+            )
+
+            // ── Mini-player overlay ──────────────────────────────────────────────
+            val miniPlayerState by liveTvPlayerViewModel.state.collectAsStateWithLifecycle()
+            val onTvScreen = currentRoute?.startsWith("tv") == true
+            val onPlayerScreen = currentRoute?.startsWith("player") == true
+            val onSettingsScreen = currentRoute?.startsWith("settings") == true
+            val showMiniPlayer = miniPlayerState.isActive
+                && !onTvScreen
+                && !onPlayerScreen
+                && !onSettingsScreen
+
+            // Pause IPTV audio when a VOD player opens to avoid double audio.
+            LaunchedEffect(onPlayerScreen) {
+                if (onPlayerScreen) liveTvPlayerViewModel.pauseForVod()
+                else if (miniPlayerState.isActive) liveTvPlayerViewModel.resumeIfActive()
+            }
+
+            // Extracted into a standalone composable to avoid ColumnScope.AnimatedVisibility
+            // being selected over the general overload from the outer Column context.
+            LiveTvMiniPlayerLayer(
+                visible = showMiniPlayer,
+                player = liveTvPlayerViewModel.player,
+                channelName = miniPlayerState.channelName,
+                programTitle = miniPlayerState.programTitle,
+                onNavigateToTv = {
+                    val channelId = miniPlayerState.channelId
+                    val route = if (channelId != null) Screen.Tv.createRoute(channelId)
+                                 else Screen.Tv.route
+                    navController.navigate(route) {
+                        popUpTo(Screen.Home.route) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                onDismiss = { liveTvPlayerViewModel.dismiss() },
             )
         }
         if (showBottomBar) {
@@ -671,6 +721,51 @@ fun ArflixApp(
             launchSingleTop = true
         }
         onConsumeLauncherRequest()
+    }
+}
+
+/**
+ * Standalone composable so [AnimatedVisibility] resolves to the general top-level overload
+ * rather than [ColumnScope.AnimatedVisibility] from the outer Column in [ArflixApp].
+ */
+@Composable
+private fun LiveTvMiniPlayerLayer(
+    visible: Boolean,
+    player: androidx.media3.exoplayer.ExoPlayer,
+    channelName: String,
+    programTitle: String,
+    onNavigateToTv: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = visible,
+            enter = fadeIn(tween(200)) + scaleIn(
+                initialScale = 0.8f,
+                animationSpec = tween(200),
+                transformOrigin = TransformOrigin(1f, 0f),
+            ),
+            exit = fadeOut(tween(150)) + scaleOut(
+                targetScale = 0.8f,
+                animationSpec = tween(150),
+                transformOrigin = TransformOrigin(1f, 0f),
+            ),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 8.dp, end = 8.dp),
+        ) {
+            LiveTvMiniPlayerOverlay(
+                player = player,
+                channelName = channelName,
+                programTitle = programTitle,
+                onClick = onNavigateToTv,
+                onDismiss = onDismiss,
+            )
+        }
+
+        // Dismiss mini-player on Back before allowing underlying screens to handle it.
+        // Registered here (deepest level) so it has priority over screens' back handlers.
+        BackHandler(enabled = visible, onBack = onDismiss)
     }
 }
 

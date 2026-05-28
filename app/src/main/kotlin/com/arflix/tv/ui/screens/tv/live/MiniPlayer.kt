@@ -203,7 +203,7 @@ private fun VideoCard(
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun LiveBug(modifier: Modifier = Modifier) {
+internal fun LiveBug(modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "live-bug")
     val alpha by transition.animateFloat(
         initialValue = 1f,

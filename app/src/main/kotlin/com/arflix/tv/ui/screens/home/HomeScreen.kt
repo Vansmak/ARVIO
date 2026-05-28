@@ -543,7 +543,10 @@ fun HomeScreen(
     onNavigateToTv: (channelId: String?, streamUrl: String?) -> Unit = { _, _ -> },
     onNavigateToSettings: () -> Unit = {},
     onSwitchProfile: () -> Unit = {},
-    onExitApp: () -> Unit = {}
+    onExitApp: () -> Unit = {},
+    // Called when Back is pressed and the mini-player overlay is active; returns true to
+    // signal that the back event was consumed (mini-player dismissed), false otherwise.
+    onInterceptBack: (() -> Boolean)? = null,
 ) {
     val isMobile = LocalDeviceType.current.isTouchDevice()
 
@@ -1132,7 +1135,8 @@ fun HomeScreen(
                 contextMenuItem = item
                 contextMenuIsContinueWatching = isContinue
                 showContextMenu = true
-            }
+            },
+            onInterceptBack = onInterceptBack,
         )
         } // end trailer-dim wrapper
 
@@ -2249,6 +2253,7 @@ private fun HomeInputLayer(
     onSwitchProfile: () -> Unit,
     onExitApp: () -> Unit,
     onOpenContextMenu: (MediaItem, Boolean) -> Unit,
+    onInterceptBack: (() -> Boolean)? = null,
 ) {
     val focusRequester = remember { FocusRequester() }
     var selectPressedInHome by remember { mutableStateOf(false) }
@@ -2480,12 +2485,16 @@ private fun HomeInputLayer(
                         Key.Back, Key.Escape -> {
                             selectPressedInHome = false
                             selectDownAtMs = 0L
-                            if (focusState.isSidebarFocused) {
+                            // Let the mini-player overlay dismiss first if active.
+                            if (onInterceptBack?.invoke() == true) {
+                                true
+                            } else if (focusState.isSidebarFocused) {
                                 onExitApp()
+                                true
                             } else {
                                 focusState.isSidebarFocused = true
+                                true
                             }
-                            true
                         }
                         Key.Menu, Key.Info -> {
                             selectPressedInHome = false

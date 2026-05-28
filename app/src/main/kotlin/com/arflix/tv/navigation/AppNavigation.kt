@@ -27,6 +27,7 @@ import com.arflix.tv.ui.screens.player.PlayerScreen
 import com.arflix.tv.ui.screens.collections.CollectionDetailsScreen
 import com.arflix.tv.ui.screens.search.SearchScreen
 import com.arflix.tv.ui.screens.settings.SettingsScreen
+import com.arflix.tv.ui.screens.tv.live.LiveTvPlayerViewModel
 import com.arflix.tv.ui.screens.tv.live.LiveTvScreen
 import com.arflix.tv.ui.screens.watchlist.WatchlistScreen
 import com.arflix.tv.ui.screens.profile.ProfileSelectionScreen
@@ -111,6 +112,7 @@ fun AppNavigation(
     preloadedHeroLogoUrl: String? = null,
     preloadedLogoCache: Map<String, String> = emptyMap(),
     currentProfile: Profile? = null,
+    liveTvPlayerViewModel: LiveTvPlayerViewModel,
     onSwitchProfile: () -> Unit = {},
     onTvFullscreenChanged: (Boolean) -> Unit = {},
     onExitApp: () -> Unit = {}
@@ -190,10 +192,15 @@ fun AppNavigation(
                         popUpTo(Screen.Home.route) { inclusive = true }
                     }
                 },
-                onExitApp = onExitApp
+                onExitApp = onExitApp,
+                onInterceptBack = {
+                    val active = liveTvPlayerViewModel.state.value.isActive
+                    if (active) liveTvPlayerViewModel.dismiss()
+                    active
+                },
             )
         }
-        
+
         // Search screen
         composable(Screen.Search.route) {
             SearchScreen(
@@ -247,6 +254,7 @@ fun AppNavigation(
             val initialChannelId = backStackEntry.arguments?.getString("channelId")
             val initialStreamUrl = backStackEntry.arguments?.getString("streamUrl")
             LiveTvScreen(
+                playerViewModel = liveTvPlayerViewModel,
                 currentProfile = currentProfile,
                 initialChannelId = initialChannelId,
                 initialStreamUrl = initialStreamUrl,
