@@ -47,8 +47,7 @@ function arvio() {
     },
     newWebhookUrl: '',
     webhookSaveStatus: '',
-    webhookTestResult: '',
-    webhookTestOk: null,
+    webhookUrlTestResults: {},  // keyed by idx → {text, ok}
     webhookLog: [],
     webhookLastFired: null,
     newHeaderKey: '',
@@ -251,25 +250,26 @@ function arvio() {
       this.webhook.headers.splice(idx, 1);
     },
 
-    async testWebhook() {
-      this.webhookTestResult = 'Sending…';
-      this.webhookTestOk = null;
+    async testWebhookUrl(idx, entry) {
+      this.webhookUrlTestResults = { ...this.webhookUrlTestResults, [idx]: { text: '…', ok: null } };
       try {
-        const res = await fetch('/api/webhook/test', { method: 'POST' });
+        const res = await fetch('/api/webhook/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: entry.url, events: entry.events }),
+        });
         const data = await res.json();
-        if (data.ok) {
-          this.webhookTestResult = `HTTP ${data.status_code} — OK`;
-          this.webhookTestOk = true;
-        } else {
-          this.webhookTestResult = data.error || `HTTP ${data.status_code} — Failed`;
-          this.webhookTestOk = false;
-        }
+        const text = data.ok ? `HTTP ${data.status_code}` : (data.error || `HTTP ${data.status_code}`);
+        this.webhookUrlTestResults = { ...this.webhookUrlTestResults, [idx]: { text, ok: data.ok } };
         await this.loadWebhookLog();
       } catch (e) {
-        this.webhookTestResult = e.message || 'Request failed';
-        this.webhookTestOk = false;
+        this.webhookUrlTestResults = { ...this.webhookUrlTestResults, [idx]: { text: e.message || 'Failed', ok: false } };
       }
-      setTimeout(() => { this.webhookTestResult = ''; this.webhookTestOk = null; }, 5000);
+      setTimeout(() => {
+        const r = { ...this.webhookUrlTestResults };
+        delete r[idx];
+        this.webhookUrlTestResults = r;
+      }, 5000);
     },
 
     async loadWebhookLog() {

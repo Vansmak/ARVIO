@@ -380,45 +380,55 @@ def sync_status():
 @app.route("/api/webhook/test", methods=["POST"])
 def webhook_test():
     blob = _load_json(SETTINGS_FILE, {})
-    urls = _resolve_webhook_urls(blob)  # no event filter — test fires to all configured URLs
-    if not urls:
-        return jsonify({"ok": False, "error": "No webhook URLs configured"}), 400
-
-    payload = {
-        "event": "test",
-        "title": "Test Event",
-        "media_type": "episode",
-        "progress_percent": 0,
-    }
     headers_dict = blob.get("webhook_headers") or {}
     req_headers = {"Content-Type": "application/json", **headers_dict}
 
-    last_ok, last_status, last_error = False, None, None
-    for url in urls:
-        try:
-            r = requests.post(url, json=payload, headers=req_headers, timeout=5)
-            _append_webhook_log({
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "event": "test",
-                "url": url,
-                "status_code": r.status_code,
-                "success": r.ok,
-                "error": None,
-            })
-            last_ok, last_status = r.ok, r.status_code
-        except Exception as e:
-            _append_webhook_log({
-                "timestamp": datetime.utcnow().isoformat() + "Z",
-                "event": "test",
-                "url": url,
-                "status_code": None,
-                "success": False,
-                "error": str(e),
-            })
-            last_error = str(e)
-    if last_error and not last_ok:
-        return jsonify({"ok": False, "error": last_error})
-    return jsonify({"ok": last_ok, "status_code": last_status, "url_count": len(urls)})
+    body = request.get_json(silent=True) or {}
+    target_url = body.get("url", "").strip()
+    events = body.get("events") or _ALL_WEBHOOK_EVENTS
+
+    if not target_url:
+        return jsonify({"ok": False, "error": "No URL specified"}), 400
+
+    # Build a payload that matches the first configured event for this URL so the
+    # receiving endpoint (e.g. Episeerr watchlist) gets a recognisable payload.
+    event_name = events[0] if events else "start"
+    if event_name in ("watchlist.add", "watchlist.remove"):
+        payload = {
+            "event": event_name,
+            "title": "Test Item",
+            "tmdb_id": 1,
+            "media_type": "show",
+        }
+    else:
+        payload = {
+            "event": event_name,
+            "title": "Test Event",
+            "media_type": "episode",
+            "progress_percent": 0,
+        }
+
+    try:
+        r = requests.post(target_url, json=payload, headers=req_headers, timeout=5)
+        _append_webhook_log({
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": event_name,
+            "url": target_url,
+            "status_code": r.status_code,
+            "success": r.ok,
+            "error": None,
+        })
+        return jsonify({"ok": r.ok, "status_code": r.status_code})
+    except Exception as e:
+        _append_webhook_log({
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "event": event_name,
+            "url": target_url,
+            "status_code": None,
+            "success": False,
+            "error": str(e),
+        })
+        return jsonify({"ok": False, "error": str(e)})
 
 
 @app.route("/api/webhook/log", methods=["GET"])
