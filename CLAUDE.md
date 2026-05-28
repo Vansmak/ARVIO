@@ -72,13 +72,23 @@ Watchlist items appear as a browsable row on the home screen.
 ### 9. `serverItemId` on `StreamSource`
 `StreamSource` data class has `serverItemId: String? = null` — populated from the home server item ID in `HomeServerRepository.buildStreamSources()`. Used by `ServerSessionRepository` to report to Jellyfin/Plex.
 
-### 10. Server "Continue on…" Home Rows (`HomeServerRepository.kt`, `HomeViewModel.kt`)
-Each connected home server gets its own "Continue on {ServerName}" row on the home screen, populated from the server's native resume data (not Trakt/local history).
+### 10. Live TV Mini-Player (`LiveTvPlayerViewModel`, `LiveTvMiniPlayerOverlay`)
+Activity-scoped ExoPlayer keeps the IPTV stream alive when navigating away from the TV guide. A picture-in-picture tile appears in the top-right corner on the home screen and other non-TV screens.
 
-- **Data class:** `HomeServerResumeItem` in `HomeServerRepository.kt`
-- **API:** `HomeServerRepository.fetchResumeItems()` — Jellyfin/Emby uses `GET /Users/{userId}/Items/Resume` + a batch series lookup for TV episodes; Plex uses `GET /hubs/home/onDeck` + per-series GUID lookups for TV episodes
-- **HomeViewModel:** `launchServerResumeFetch()` / `publishServerResume()` — mirrors the CW fetch pattern; row inserted after "Continue Watching", before other rows; restarted on profile switch
-- Items with no resolvable TMDB ID are silently skipped
+- **ViewModel:** `LiveTvPlayerViewModel` — activity-scoped (above NavHost), owns ExoPlayer instance
+- **Surface handoff:** `LiveTvScreen` attaches/detaches its surface; mini-player overlay uses the same player
+- **Dismiss:** Back key on home screen (`onInterceptBack`), or VOD player opening (`dismiss()` — not just pause)
+- **Channel switch:** `playFromHome()` calls `player.stop()` + `clearMediaItems()` before loading new stream (prepare() is a no-op on an already-READY player without stop first)
+
+### 11. On Now Home Row (`HomeViewModel.launchOnNowRowObserver`)
+Favorited IPTV channels appear as a dedicated "On Now" row showing current program, progress bar, and time remaining.
+
+- **Builder:** `launchOnNowRowObserver()` — reactive, independent of `loadHomeData()`. Calls `warmupFromCacheOnly()` then observes `observeFavoriteChannels()`. Backoff retry at 3s/8s/20s/60s for cold starts.
+- **Never removed by `loadHomeData()`** — only preserves the row; never calls `buildFavoriteTvCategory()` or removes `favorite_tv` from the category list
+- **Card:** `LiveTvChannelCard.kt` — `.focusProperties { canFocus = false }` prevents system focus conflicts with the custom D-pad system
+- **D-pad press:** short press → mini-player; long press → `LiveTvContextMenu` (Play Full Screen / TV Guide)
+- **Hero backdrop:** frozen when focused on On Now row — does not update hero background for IPTV items
+- **Logo fallback:** channels without `channel.logo` show a colored background (hash of channel name) + initial letter
 
 ## Key Files
 
@@ -94,6 +104,9 @@ Each connected home server gets its own "Continue on {ServerName}" row on the ho
 | `ui/screens/player/PlayerViewModel.kt` | Triggers webhook + session calls at playback events |
 | `data/model/Models.kt` | `StreamSource.serverItemId` field |
 | `data/repository/HomeServerRepository.kt` | Populates `serverItemId` in `buildStreamSources()` |
+| `ui/screens/home/LiveTvChannelCard.kt` | On Now row card — logo, EPG progress, LIVE badge |
+| `ui/screens/tv/live/LiveTvPlayerViewModel.kt` | Activity-scoped IPTV player for mini-player |
+| `ui/screens/tv/live/LiveTvMiniPlayerOverlay.kt` | Floating PiP tile shown on non-TV screens |
 
 ## Settings Navigation Pattern
 
@@ -110,20 +123,6 @@ When adding new rows to a section:
 2. Add the row to the composable with the next index
 3. Add the index case to the Enter key handler `when (currentSection) { "section" -> when (contentFocusIndex) { N -> ... } }`
 
-## Episeerr Integration
-
-Episeerr is Joe's own Python/Flask media management app at `~/projects/episeerr_dev/`. The Arvio integration blueprint is at `episeerr_dev/integrations/arvio.py`, URL prefix `/api/integration/arvio`.
-
-Routes:
-- `POST /webhook` — playback events
-- `GET /watchlist` — watchlist with Sonarr/Radarr status
-- `GET /status` — connection/sync status
-- `POST /sync` — trigger watchlist sync to Sonarr/Radarr
-- `GET /settings` — load saved Arvio settings blob
-- `PUT /settings` — save Arvio settings blob (full CloudSync JSON)
-
-Settings stored at `data/arvio_settings.json` inside the Episeerr working directory.
-
 ## TV Guide Layout (LiveTvScreen.kt)
 
 TV is always fullscreen — video fills the screen, no mini-player. The guide is an overlay:
@@ -138,6 +137,99 @@ TV is always fullscreen — video fills the screen, no mini-player. The guide is
 Touch devices still use the old mini-player + side-by-side EPG layout (`useTouchRail` or `else Row` path).
 
 Key state: `isGuideOpen`, `guideGroupsVisible` in `LiveTvScreen`. Helpers: `openGuide()`, `closeGuide()`.
+
+## Episeerr Integration
+
+Episeerr is Joe's own Python/Flask media management app. **Two separate directories:**
+
+| | episeerr_custom | episeerr_dev |
+|---|---|---|
+| Purpose | **Production running instance** | Upstream source / future releases |
+| Deploy | `docker cp <file> episeerr:/app/<file>` | `./release_dev.sh custom` → Docker Hub |
+| Container | `episeerr` (port 5002) | same image, different build |
+
+**Always edit `episeerr_custom`, deploy via `docker cp` to `episeerr` container.**
+`docker cp` changes survive `docker restart` but NOT container recreate. Run `./release_dev.sh custom` from `episeerr_custom/` to bake into the Docker Hub image.
+
+### Arvio integration blueprint
+File: `episeerr_custom/integrations/arvio.py`, URL prefix `/api/integration/arvio`.
+
+Routes:
+- `POST /webhook` — playback events (start/pause/stop/progress/watchlist.add/watchlist.remove)
+- `GET /watchlist` — watchlist JSON for TV app home row (enriched with Sonarr/Radarr status)
+- `POST /watchlist` — accepts watchlist.add / watchlist.remove webhook payloads (same path, 200 not 405)
+- `GET /watchlist-html` — poster card HTML for Episeerr dashboard widget
+- `GET /status` — connection/sync status
+- `POST /sync` — trigger watchlist sync to Sonarr/Radarr
+- `GET /settings` — load saved Arvio settings blob
+- `PUT /settings` — save Arvio settings blob (full CloudSync JSON)
+
+### Arvio settings blob structure (critical — wrong key = empty watchlist)
+The TV app pushes a settings blob to `PUT /api/integration/arvio/settings`. Key paths:
+
+```
+settings["activeProfileId"]                        → current profile UUID
+settings["watchlistByProfile"][profileId]          → list of watchlist items ← CORRECT KEY
+settings["profileSettingsById"][profileId]         → UI preferences (NOT watchlist)
+settings["iptvByProfile"][profileId]["favoriteChannels"] → list of channel IDs
+```
+
+**Watchlist item fields (camelCase from Kotlin serialization):**
+- `tmdbId` (not `tmdb_id`)
+- `title`
+- `mediaType`: `"movie"` or `"TV"` — normalise to lowercase before Sonarr/Radarr lookup
+- `posterPath`: **full URL** (`https://image.tmdb.org/t/p/w780/...`) — do NOT prepend TMDB base
+- `backdropPath`: full URL
+
+When reading watchlist items, normalise field names:
+```python
+entry["tmdb_id"] = entry.get("tmdbId")
+entry["media_type"] = (entry.get("mediaType") or "").lower()
+entry["image"] = entry.get("posterPath", "")  # already a full URL
+```
+
+### Three-way watchlist sync
+The watchlist exists in three places that must stay in sync:
+
+1. **TV app** (DataStore) — source of truth; pushed to arvio-server settings blob and fires webhooks to Episeerr
+2. **Episeerr** (`episeerr:/app/data/arvio_settings.json`) — receives settings blob from TV app; `watchlistByProfile` is the correct key
+3. **arvio-server** (`/data/watchlist.json`) — receives items via `POST http://arvio-server:7979/api/media/watchlist`
+
+**Webhook flow (TV app → Episeerr):**
+`watchlist.add` → `_sync_single_item()` (Sonarr/Radarr) + `_sync_server_watchlist_add()` (arvio-server)
+`watchlist.remove` → exclusion list + `_sync_server_watchlist_remove()` (arvio-server)
+
+**`_get_sync_server_url()`** reads from `service['url']` in the Episeerr DB (the "Arvio Sync-Server URL" field in Setup). Falls back to legacy `config['sync_server_url']` for backwards compat.
+
+## arvio-server
+
+Separate container for the sync server web UI (port 7979).
+
+```
+container_name: arvio-server
+build:    ~/projects/arvio/sync-server/
+data:     /home/joe/config/arvio-server/data  →  /data/  inside container
+ports:    7979:7979
+```
+
+**Code deploy:** `docker cp ~/projects/arvio/sync-server/<file> arvio-server:/app/<file> && docker restart arvio-server`
+
+**Data files** (inside container at `/data/`, host at `/home/joe/config/arvio-server/data/`):
+- `arvio_settings.json` — full settings blob from TV app
+- `watchlist.json` — web UI managed watchlist (separate from TV app's watchlist)
+- `server_config.json` — TMDB key and server-level config
+- `webhook_log.json`, `history.json`
+
+**Critical:** `/data/` and the source tree `~/projects/arvio/sync-server/` are completely separate. Data files are on the host volume. `docker cp` goes to `/app/` (code), not `/data/` (data).
+
+### Service enable/disable (Episeerr)
+Episeerr services table has `enabled BOOLEAN DEFAULT 1`. `get_service()` filters `WHERE enabled = 1`, so:
+- Setting `enabled = 0` causes `get_service()` to return `None` for that service
+- All API calls gated on `get_service()` (dashboard stats, config fetches) are automatically skipped
+- Toggle endpoint: `POST /api/toggle-service/<service>` with `{"enabled": true/false}`
+- UI: enable/disable switch in Services setup page, first element in each card header
+
+**Do NOT use `config is not None` as the widget enabled check** — that also hides services with no DB row (env-var configured services like Radarr, Sonos, SABnzbd). Instead query `SELECT enabled FROM services WHERE ...` and only set `widget['enabled'] = False` when `row is not None and not row[0]`.
 
 ## TODO
 
