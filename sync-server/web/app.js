@@ -1,4 +1,6 @@
 function arvio() {
+  const ALL_WEBHOOK_EVENTS = ['start','pause','resume','stop','progress','watchlist.add','watchlist.remove'];
+
   return {
     tabs: [
       { id: 'settings', label: 'Settings' },
@@ -15,7 +17,7 @@ function arvio() {
     origin: window.location.origin,
     tmdbConfigured: false,
 
-    // Settings
+    // Settings (API keys + raw blob)
     settings: {},
     saveStatus: '',
     restoreStatus: '',
@@ -34,6 +36,27 @@ function arvio() {
     // IPTV
     iptv: { m3uUrl: '', epgUrl: '' },
     iptvStatus: '',
+
+    // Webhook settings
+    webhook: {
+      enabled: false,
+      urls: [],     // [{url: string, events: string[]}]
+      intervalSeconds: '30',
+      completionPercent: 80,
+      headers: [],  // [{key, value}] — serialised to/from object for storage
+    },
+    newWebhookUrl: '',
+    webhookSaveStatus: '',
+    webhookTestResult: '',
+    webhookTestOk: null,
+    webhookLog: [],
+    webhookLastFired: null,
+    newHeaderKey: '',
+    newHeaderValue: '',
+
+    // Watchlist API settings
+    watchlistApi: { enabled: false, port: '7979' },
+    watchlistSaveStatus: '',
 
     // Addons
     addons: [],
@@ -110,22 +133,42 @@ function arvio() {
         const res = await fetch('/api/settings');
         this.settings = await res.json();
         this.tmdbConfigured = !!this.settings.tmdb_api_key;
+
+        // Populate webhook state from flat settings blob
+        this.webhook.enabled           = !!this.settings.webhook_enabled;
+        // Load webhook_urls — normalize to [{url, events}], migrate from legacy string array or single URL
+        const rawUrls = this.settings.webhook_urls;
+        if (Array.isArray(rawUrls) && rawUrls.length > 0) {
+          this.webhook.urls = rawUrls.map(u =>
+            typeof u === 'string'
+              ? { url: u, events: [...ALL_WEBHOOK_EVENTS] }
+              : { url: u.url || '', events: Array.isArray(u.events) ? [...u.events] : [...ALL_WEBHOOK_EVENTS] }
+          );
+        } else if (this.settings.webhook_url) {
+          this.webhook.urls = [{ url: this.settings.webhook_url, events: [...ALL_WEBHOOK_EVENTS] }];
+        } else {
+          this.webhook.urls = [];
+        }
+        this.webhook.intervalSeconds   = this.settings.webhook_interval_seconds || '30';
+        this.webhook.completionPercent = this.settings.webhook_completion_percent ?? 80;
+        const hobj = this.settings.webhook_headers || {};
+        this.webhook.headers = Object.entries(hobj).map(([key, value]) => ({ key, value }));
+
+        // Populate watchlist API state
+        this.watchlistApi.enabled = !!this.settings.watchlist_api_enabled;
+        this.watchlistApi.port    = this.settings.watchlist_api_port || '7979';
+
+        await this.loadWebhookLog();
       } catch (e) {
         console.error('loadSettings:', e);
       }
     },
 
-    async saveSettings() {
+    async saveApiKeys() {
       const payload = {
-        tmdb_api_key:             this.settings.tmdb_api_key             || '',
-        trakt_client_id:          this.settings.trakt_client_id          || '',
-        trakt_client_secret:      this.settings.trakt_client_secret      || '',
-        webhook_url:              this.settings.webhook_url              || '',
-        webhook_enabled:          !!this.settings.webhook_enabled,
-        webhook_interval_seconds: this.settings.webhook_interval_seconds || '30',
-        watchlist_api_enabled:          !!this.settings.watchlist_api_enabled,
-        watchlist_api_port:             this.settings.watchlist_api_port             || '7979',
-        webhook_completion_percent:     this.settings.webhook_completion_percent     || '90',
+        tmdb_api_key:        this.settings.tmdb_api_key        || '',
+        trakt_client_id:     this.settings.trakt_client_id     || '',
+        trakt_client_secret: this.settings.trakt_client_secret || '',
       };
       try {
         await fetch('/api/settings', {
@@ -142,6 +185,99 @@ function arvio() {
         this.saveStatus = 'Error saving';
         setTimeout(() => { this.saveStatus = ''; }, 3000);
       }
+    },
+
+    async saveWebhookSettings() {
+      const headersObj = {};
+      for (const h of this.webhook.headers) {
+        if (h.key.trim()) headersObj[h.key.trim()] = h.value;
+      }
+      const payload = {
+        webhook_enabled:            this.webhook.enabled,
+        webhook_urls:               this.webhook.urls.filter(u => u.url.trim()),
+        webhook_interval_seconds:   String(this.webhook.intervalSeconds || '30'),
+        webhook_completion_percent: parseInt(this.webhook.completionPercent) || 80,
+        webhook_headers:            headersObj,
+      };
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.webhookSaveStatus = 'Saved!';
+        setTimeout(() => { this.webhookSaveStatus = ''; }, 2000);
+      } catch (e) {
+        this.webhookSaveStatus = 'Error saving';
+        setTimeout(() => { this.webhookSaveStatus = ''; }, 3000);
+      }
+    },
+
+    async saveWatchlistSettings() {
+      const payload = {
+        watchlist_api_enabled: this.watchlistApi.enabled,
+        watchlist_api_port:    String(this.watchlistApi.port || '7979'),
+      };
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        this.watchlistSaveStatus = 'Saved!';
+        setTimeout(() => { this.watchlistSaveStatus = ''; }, 2000);
+      } catch (e) {
+        this.watchlistSaveStatus = 'Error saving';
+        setTimeout(() => { this.watchlistSaveStatus = ''; }, 3000);
+      }
+    },
+
+    addWebhookUrl() {
+      const u = this.newWebhookUrl.trim();
+      if (u) { this.webhook.urls.push({ url: u, events: [...ALL_WEBHOOK_EVENTS] }); this.newWebhookUrl = ''; }
+    },
+
+    removeWebhookUrl(idx) {
+      this.webhook.urls.splice(idx, 1);
+    },
+
+    addWebhookHeader() {
+      this.webhook.headers.push({ key: this.newHeaderKey.trim(), value: this.newHeaderValue });
+      this.newHeaderKey = '';
+      this.newHeaderValue = '';
+    },
+
+    removeWebhookHeader(idx) {
+      this.webhook.headers.splice(idx, 1);
+    },
+
+    async testWebhook() {
+      this.webhookTestResult = 'Sending…';
+      this.webhookTestOk = null;
+      try {
+        const res = await fetch('/api/webhook/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          this.webhookTestResult = `HTTP ${data.status_code} — OK`;
+          this.webhookTestOk = true;
+        } else {
+          this.webhookTestResult = data.error || `HTTP ${data.status_code} — Failed`;
+          this.webhookTestOk = false;
+        }
+        await this.loadWebhookLog();
+      } catch (e) {
+        this.webhookTestResult = e.message || 'Request failed';
+        this.webhookTestOk = false;
+      }
+      setTimeout(() => { this.webhookTestResult = ''; this.webhookTestOk = null; }, 5000);
+    },
+
+    async loadWebhookLog() {
+      try {
+        const res = await fetch('/api/webhook/log');
+        this.webhookLog = await res.json();
+        this.webhookLastFired = this.webhookLog.length > 0 ? this.webhookLog[0] : null;
+      } catch (e) { console.error('loadWebhookLog:', e); }
     },
 
     async restoreBackup(event) {
@@ -275,7 +411,6 @@ function arvio() {
         this.addonStatus = `Added: ${data.addon.name}`;
         this.newAddonUrl = '';
         await this.loadAddons();
-        await this.loadSettings();
         setTimeout(() => { this.addonStatus = ''; }, 3000);
       } catch (e) {
         this.addonStatus = 'Error: ' + e.message;
@@ -297,9 +432,7 @@ function arvio() {
       try {
         const res = await fetch('/api/media/watchlist');
         this.watchlistItems = await res.json();
-      } catch (e) {
-        console.error('loadWatchlist:', e);
-      }
+      } catch (e) { console.error('loadWatchlist:', e); }
     },
 
     async loadTrending() {
@@ -307,9 +440,7 @@ function arvio() {
       try {
         const res = await fetch('/api/media/trending');
         this.trendingItems = await res.json();
-      } catch (e) {
-        console.error('loadTrending:', e);
-      }
+      } catch (e) { console.error('loadTrending:', e); }
     },
 
     async onSearchInput() {
@@ -319,9 +450,7 @@ function arvio() {
       try {
         const res = await fetch('/api/media/search?q=' + encodeURIComponent(q));
         this.searchResults = await res.json();
-      } catch (e) {
-        console.error('search:', e);
-      }
+      } catch (e) { console.error('search:', e); }
     },
 
     async toggleWatchlist(item) {
@@ -364,9 +493,7 @@ function arvio() {
       try {
         const res = await fetch('/api/media/history?limit=200');
         this.historyItems = await res.json();
-      } catch (e) {
-        console.error('loadHistory:', e);
-      }
+      } catch (e) { console.error('loadHistory:', e); }
     },
 
     async clearHistory() {

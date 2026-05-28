@@ -120,9 +120,8 @@ Access settings from the left sidebar on the home screen or TV screen.
 **Plugins & Extensions**
 - Add / remove M3U and Xtream IPTV playlists.
 - Add / remove third-party addon sources by URL.
-- Add integration plugins (e.g. Episeerr) by URL — the app auto-detects supported plugins and shows their settings inline.
 - **Integration settings** (always visible at the bottom of this section):
-  - Progress Webhook — toggle on/off, set URL, set fire interval
+  - Progress Webhook — toggle on/off, manage webhook URLs, set fire interval
   - Watchlist API — toggle the LAN JSON server on/off, set port
   - Watched Threshold — percentage at which playback counts as "watched" (50–99%)
 
@@ -135,11 +134,36 @@ Access settings from the left sidebar on the home screen or TV screen.
 
 ---
 
-## Plugins
+## Webhooks
 
-ARVIO supports integration plugins added via URL — the same field used for addon sources. When you add a supported plugin URL, the app detects it and shows that plugin's settings inline in its card.
+ARVIO can POST playback and watchlist events to any HTTP endpoint. You can add multiple webhook URLs; each URL has its own event selection so different services receive only the events they need.
 
-Each plugin has its own setup guide. See [`docs/plugins.md`](docs/plugins.md) for the full list.
+### Adding a webhook URL
+
+1. Go to **Settings → Plugins & Extensions**.
+2. Scroll to **Progress Webhook** and toggle it on.
+3. Press the webhook URL row (or the **+ Add URL** row) to open the URL editor.
+4. Enter the endpoint URL (e.g. `http://192.168.1.x:5002/api/integration/arvio/webhook`).
+5. Check or uncheck the events this URL should receive:
+   - **Start / Pause / Resume / Stop** — playback lifecycle events
+   - **Progress** — periodic heartbeat (fires every N seconds while playing)
+   - **Watchlist Add / Watchlist Remove** — fires when items are added to or removed from the watchlist
+6. Press **Save**. Repeat to add more URLs.
+
+### Event notes
+
+- **Progress** fires at the interval set in the *Progress interval* row (default 30 s). It is throttled to that interval even if multiple URLs subscribe to it.
+- **Watchlist events** fire immediately when a watchlist change happens on any device — no polling needed.
+- To send watchlist events to a different endpoint than playback events, add a second URL and enable only `watchlist.add` / `watchlist.remove` for that entry.
+- Webhook delivery is best-effort. No retry on failure; check your endpoint logs if events are missing.
+
+### Common endpoint examples
+
+| Service | URL pattern |
+|---------|-------------|
+| Episeerr | `http://your-episeerr:5002/api/integration/arvio/webhook` |
+| Home Assistant webhook | `http://homeassistant.local:8123/api/webhook/your-webhook-id` |
+| n8n webhook | `http://your-n8n:5678/webhook/your-path` |
 
 ---
 

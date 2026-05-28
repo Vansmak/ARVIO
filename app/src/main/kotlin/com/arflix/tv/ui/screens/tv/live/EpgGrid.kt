@@ -226,7 +226,9 @@ fun EpgGrid(
         val id = selectedChannelId ?: return@LaunchedEffect
         val idx = channels.indexOfFirst { it.id == id }
         if (idx < 0) return@LaunchedEffect
+        activeChannelFocusId = id
         channelListState.scrollToItem(idx)
+        delay(32L)
         runCatching { selectedChannelFocusRequester.requestFocus() }
     }
 

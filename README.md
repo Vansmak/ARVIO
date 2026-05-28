@@ -6,25 +6,29 @@ The app provides a media browser, player shell, profile support, optional cloud 
 
 ## Fork additions (Vansmak/ARVIO)
 
-This fork replaces ARVIO Cloud (Supabase) with self-hosted settings sync and a plugin model for third-party integrations.
+This fork replaces ARVIO Cloud (Supabase) with self-hosted settings sync, a generic webhook system, and home-server session reporting.
 
-**Self-hosted sync** — settings, profiles, addons, IPTV, home server connections, and watchlist are synced to a server you control. No cloud account required. See [sync-server/](sync-server/) for a minimal Docker container, or use [arvio-server](sync-server/) — a full LAN web UI for first-time setup — on port 7979.
+**Self-hosted sync** — settings, profiles, addons, IPTV, home server connections, and watchlist sync to a server you control. No cloud account required. See [sync-server/](sync-server/) for a ready-to-run Docker container and web UI (port 7979).
 
-**New device setup:** tap **Connect to Server** on the profile screen, enter your server URL, and all settings are restored in one step. Or open the arvio-server web UI from a browser and configure everything there first.
+**New device setup:** tap **Connect to Server** on the profile screen, enter your server URL, and all settings restore in one step. Or configure everything from the arvio-server web UI in a browser first.
 
-**Plugin model** — third-party integrations are added via URL in Settings → Plugins & Extensions, the same as addon sources. The app auto-detects supported plugins and shows their settings inline. No dedicated settings sections needed. See [docs/plugins.md](docs/plugins.md) for supported plugins.
+**Generic webhook system** — fire HTTP POST events to any URL on playback and watchlist changes. Add as many webhook endpoints as you need; each URL has its own event selection.
 
-**Episeerr plugin** (optional) — add Episeerr by URL to get:
-- Playback webhooks (start/pause/stop/progress events)
-- LAN watchlist server (JSON on a configurable port, default 7979)
-- Sonarr/Radarr watchlist sync via Episeerr
+Supported events: `start`, `pause`, `resume`, `stop`, `progress`, `watchlist.add`, `watchlist.remove`.
 
-**Integration settings** (always in Plugins & Extensions, no plugin required):
-- Progress webhook — URL, toggle, fire interval
-- Watchlist API — toggle, port
+Example uses:
+- **Episeerr** — point a webhook URL at `http://your-episeerr:5002/api/integration/arvio/webhook` and select the events you want
+- **Home Assistant** — fire `start`/`stop` to trigger automations (dim lights, silence notifications)
+- **n8n / Zapier / Make** — route any event into your own automation workflows
+
+**Integration settings** (always in Plugins & Extensions):
+- Progress webhook — add/remove URLs, select events per URL, set fire interval
+- Watchlist API — toggle the LAN JSON server on/off, set port (default 7979)
 - Watched threshold — configurable 50–99%
 
-**Direct API calls** — TMDB and Trakt are called directly with your own API keys (entered in Settings). The Supabase Edge Function proxy is no longer used.
+**Home-server session reporting** — playback progress is reported to connected Jellyfin, Emby, and Plex servers during playback (ticks for JF/Emby, timeline for Plex).
+
+**Direct API calls** — TMDB and Trakt are called directly with your own API keys. The Supabase Edge Function proxy is no longer used.
 
 ---
 
@@ -57,7 +61,7 @@ It is not intended as an advertising page, download landing page, or content dis
 
 ## Recent Highlights
 
-Recent 1.9.91 and 1.9.92 work focused on IPTV category handling, large-list TV navigation, watchlist and continue-watching reliability, catalog discovery, home-server sources/catalogs, profile avatar sync, mobile layout fixes, player navigation, and Play/GitHub policy cleanup.
+Recent 2.0.13 work: generic multi-URL webhook system with per-URL event selection, self-hosted sync replacing ARVIO Cloud, home-server session reporting, and LAN watchlist API server.
 
 For full release history, see [CHANGELOG.md](CHANGELOG.md).
 
@@ -93,7 +97,7 @@ Contributors should not submit copyrighted media, credentials, private keys, acc
 
 ## Cloud Sync
 
-**This fork uses self-hosted sync instead of ARVIO Cloud.** Settings are synced to your own server via three lightweight HTTP endpoints. See [sync-server/](sync-server/) for a ready-to-run Docker container, or point the app at an Episeerr instance.
+**This fork uses self-hosted sync instead of ARVIO Cloud.** Settings, profiles, addons, IPTV, and watchlist sync to your own server via lightweight HTTP endpoints. See [sync-server/](sync-server/) for a ready-to-run Docker container with a browser-based setup UI.
 
 The original ARVIO Cloud (Supabase) backend is no longer required and has been removed from the UI.
 

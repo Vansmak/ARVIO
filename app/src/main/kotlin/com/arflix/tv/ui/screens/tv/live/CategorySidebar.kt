@@ -101,6 +101,7 @@ fun CategorySidebar(
     onMoveUpFromSearch: () -> Unit = {},
     onTopBoundaryFocusChanged: (Boolean) -> Unit = {},
     focusSearchSignal: Int = 0,
+    focusFirstCategorySignal: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val targetWidth = if (expanded) LiveDims.SidebarExpanded else LiveDims.SidebarCollapsed
@@ -113,6 +114,16 @@ fun CategorySidebar(
     var expandedAll by rememberSaveable { mutableStateOf(false) }
     var menuForGroup by rememberSaveable { mutableStateOf<String?>(null) }
     val searchFocusRequester = remember { FocusRequester() }
+    val firstCategoryFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(focusFirstCategorySignal) {
+        if (focusFirstCategorySignal > 0) {
+            repeat(3) {
+                runCatching { firstCategoryFocusRequester.requestFocus() }
+                delay(50L)
+            }
+        }
+    }
 
     LaunchedEffect(focusSearchSignal) {
         if (focusSearchSignal > 0) {
@@ -169,6 +180,7 @@ fun CategorySidebar(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             items(tree.top, key = { it.id }) { cat ->
+                val isFirstItem = tree.top.firstOrNull()?.id == cat.id
                 val isAllGroup = cat.id == "all" && cat.children.isNotEmpty()
                 val isOpen = isAllGroup && expandedAll
                 SidebarRow(
@@ -186,6 +198,7 @@ fun CategorySidebar(
                         }
                         onSelect(cat.id)
                     },
+                    focusRequester = if (isFirstItem) firstCategoryFocusRequester else null,
                 )
                 if (isOpen && expanded) {
                     cat.children.forEach { child ->

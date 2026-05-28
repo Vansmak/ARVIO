@@ -10,12 +10,6 @@ import com.arflix.tv.util.Constants
 import com.arflix.tv.util.settingsDataStore
 import com.arflix.tv.util.traktDataStore
 import com.google.gson.Gson
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +25,10 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,7 +56,8 @@ class WatchlistRepository @Inject constructor(
     private val profileManager: ProfileManager,
     private val tmdbApi: TmdbApi,
     private val invalidationBus: CloudSyncInvalidationBus,
-    private val okHttpClient: OkHttpClient
+    private val progressWebhookRepository: ProgressWebhookRepository,
+    private val okHttpClient: OkHttpClient,
 ) {
     private val gson = Gson()
 
@@ -122,38 +121,40 @@ class WatchlistRepository @Inject constructor(
         }
     }
 
+    private suspend fun syncServerUrl(): String =
+        context.settingsDataStore.data.first()[SYNC_SERVER_URL_KEY].orEmpty().trim()
+
+    private fun notifySyncServer(method: String, url: String, body: String? = null) {
+        runCatching {
+            val req = Request.Builder().url(url).apply {
+                if (method == "DELETE") delete()
+                else post((body ?: "{}").toRequestBody("application/json".toMediaType()))
+            }.build()
+            okHttpClient.newCall(req).execute().close()
+        }
+    }
+
     /**
      * Add item to watchlist
      */
     suspend fun addToWatchlist(mediaType: MediaType, tmdbId: Int, mediaItem: MediaItem? = null) {
         val key = cacheKey(mediaType, tmdbId)
+        val typeStr = if (mediaType == MediaType.TV) "tv" else "movie"
 
-        // Create local item
         val localItem = LocalWatchlistItem(
             tmdbId = tmdbId,
-            mediaType = if (mediaType == MediaType.TV) "tv" else "movie",
+            mediaType = typeStr,
             title = mediaItem?.title ?: "",
             posterPath = mediaItem?.image,
             backdropPath = mediaItem?.backdrop,
             addedAt = System.currentTimeMillis()
         )
 
-        // Load existing items
         val existingItems = loadWatchlistRaw().toMutableList()
-
-        // Remove if already exists (will re-add at front)
-        existingItems.removeAll { it.tmdbId == tmdbId && it.mediaType == localItem.mediaType }
-
-        // Add to front (most recent)
+        existingItems.removeAll { it.tmdbId == tmdbId && it.mediaType == typeStr }
         existingItems.add(0, localItem)
-
-        // Save to DataStore
         saveWatchlist(existingItems)
 
-        // Push to Episeerr for automatic sync
-        pushToEpiseerr(existingItems)
-
-        // Update in-memory cache
         cacheMutex.withLock {
             keyCache.add(key)
             itemsCache.removeAll { it.id == tmdbId && it.mediaType == mediaType }
@@ -163,32 +164,100 @@ class WatchlistRepository @Inject constructor(
             }
             cacheLoaded = true
         }
+
+        // Fire webhook + notify sync server (best-effort, non-blocking)
+        withContext(Dispatchers.IO) {
+            progressWebhookRepository.fireWatchlistEvent(
+                event = "watchlist.add",
+                title = mediaItem?.title ?: localItem.title,
+                tmdbId = tmdbId,
+                mediaType = mediaType,
+                year = mediaItem?.year
+            )
+            val base = syncServerUrl()
+            if (base.isNotBlank()) {
+                val payload = org.json.JSONObject().apply {
+                    put("id", tmdbId)
+                    put("mediaType", typeStr)
+                    put("title", localItem.title)
+                    localItem.posterPath?.let { put("posterPath", it) }
+                }.toString()
+                notifySyncServer("POST", "$base/api/media/watchlist", payload)
+            }
+        }
     }
 
     /**
-     * Remove item from watchlist
+     * Remove item from watchlist (watchlist only — does not touch Sonarr/Radarr).
      */
     suspend fun removeFromWatchlist(mediaType: MediaType, tmdbId: Int) {
         val key = cacheKey(mediaType, tmdbId)
         val typeStr = if (mediaType == MediaType.TV) "tv" else "movie"
 
-        // Load existing items
+        // Grab title for webhook before removing
+        val removedTitle = cacheMutex.withLock {
+            itemsCache.firstOrNull { it.id == tmdbId && it.mediaType == mediaType }?.title ?: ""
+        }
+
         val existingItems = loadWatchlistRaw().toMutableList()
-
-        // Remove the item
         existingItems.removeAll { it.tmdbId == tmdbId && it.mediaType == typeStr }
-
-        // Save to DataStore
         saveWatchlist(existingItems)
 
-        // Push to Episeerr for automatic sync
-        pushToEpiseerr(existingItems)
-
-        // Update in-memory cache
         cacheMutex.withLock {
             keyCache.remove(key)
             itemsCache.removeAll { it.id == tmdbId && it.mediaType == mediaType }
             _watchlistItems.value = itemsCache.toList()
+        }
+
+        // Fire webhook + notify sync server (best-effort, non-blocking)
+        withContext(Dispatchers.IO) {
+            progressWebhookRepository.fireWatchlistEvent(
+                event = "watchlist.remove",
+                title = removedTitle,
+                tmdbId = tmdbId,
+                mediaType = mediaType
+            )
+            val base = syncServerUrl()
+            if (base.isNotBlank()) {
+                notifySyncServer("DELETE", "$base/api/media/watchlist/$typeStr/$tmdbId")
+            }
+        }
+    }
+
+    /**
+     * Pull watchlist from sync server and merge with local state (additive, no removals).
+     * Call on startup and after profile restore.
+     */
+    suspend fun syncFromSyncServer() = withContext(Dispatchers.IO) {
+        val base = syncServerUrl()
+        if (base.isBlank()) return@withContext
+        runCatching {
+            val req = Request.Builder().url("$base/api/media/watchlist").get().build()
+            val resp = okHttpClient.newCall(req).execute()
+            if (!resp.isSuccessful) return@runCatching
+            val body = resp.body?.string() ?: return@runCatching
+            val arr = org.json.JSONArray(body)
+            val existing = loadWatchlistRaw().associateBy { "${it.mediaType}:${it.tmdbId}" }
+            val merged = existing.toMutableMap()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val id = obj.optInt("id").takeIf { it > 0 } ?: continue
+                val mt = obj.optString("mediaType", "").lowercase().let { t ->
+                    when { t.startsWith("tv") || t == "show" || t == "series" -> "tv"; else -> "movie" }
+                }
+                val k = "$mt:$id"
+                if (!merged.containsKey(k)) {
+                    merged[k] = LocalWatchlistItem(
+                        tmdbId = id,
+                        mediaType = mt,
+                        title = obj.optString("title", ""),
+                        posterPath = obj.optString("posterPath", "").takeIf { it.isNotBlank() },
+                        addedAt = obj.optLong("addedAt", System.currentTimeMillis())
+                    )
+                }
+            }
+            saveWatchlist(merged.values.toList())
+            cacheMutex.withLock { itemsCache.clear(); keyCache.clear(); cacheLoaded = false }
         }
     }
 
@@ -299,7 +368,6 @@ class WatchlistRepository @Inject constructor(
         }
 
         saveWatchlist(ordered)
-        pushToEpiseerr(ordered)
 
         // Invalidate enriched cache so the UI picks up the new order on next refresh.
         cacheMutex.withLock {
@@ -492,36 +560,6 @@ class WatchlistRepository @Inject constructor(
             compareBy<MediaItem> { it.sourceOrder }
                 .thenByDescending { it.addedAt }
         )
-    }
-
-    private suspend fun pushToEpiseerr(items: List<LocalWatchlistItem>) = withContext(Dispatchers.IO) {
-        runCatching {
-            val prefs = context.settingsDataStore.data.first()
-            val episeerrUrl = (prefs[EPISEERR_URL_KEY]?.trim()?.takeIf { it.isNotBlank() }
-                ?: prefs[SYNC_SERVER_URL_KEY]?.trim()).orEmpty()
-            if (episeerrUrl.isBlank()) return@withContext
-            val arr = JSONArray()
-            items.forEach { item ->
-                arr.put(JSONObject().apply {
-                    put("tmdb_id", item.tmdbId)
-                    put("media_type", if (item.mediaType == "tv") "show" else item.mediaType)
-                    put("title", item.title)
-                    put("poster_path", item.posterPath ?: "")
-                    put("year", "")
-                })
-            }
-            val body = arr.toString().toRequestBody("application/json".toMediaType())
-            val req = Request.Builder()
-                .url("$episeerrUrl/api/integration/arvio/watchlist/push")
-                .post(body)
-                .build()
-            okHttpClient.newCall(req).execute().close()
-        }.onFailure { e ->
-            AppLogger.recordException(
-                throwable = e,
-                context = mapOf("error_area" to "WatchlistRepository", "phase" to "episeerr_push")
-            )
-        }
     }
 
 }

@@ -2,7 +2,7 @@
 Arvio Sync Server — standalone Flask server for Arvio Android TV app.
 
 Provides:
-  - Sync API  (compatible with Episeerr's /api/integration/arvio/* routes)
+  - Sync API  (/api/integration/arvio/*)
   - Dashboard API  (same surface as WebAppServer on the TV device)
   - Web UI at /
   - SSE player-state endpoint (for dashboard live updates)
@@ -26,9 +26,10 @@ from flask import Flask, request, jsonify, send_from_directory, Response, stream
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-SETTINGS_FILE     = DATA_DIR / "arvio_settings.json"
-WATCHLIST_FILE    = DATA_DIR / "watchlist.json"
-HISTORY_FILE      = DATA_DIR / "history.json"
+SETTINGS_FILE      = DATA_DIR / "arvio_settings.json"
+WATCHLIST_FILE     = DATA_DIR / "watchlist.json"
+HISTORY_FILE       = DATA_DIR / "history.json"
+WEBHOOK_LOG_FILE   = DATA_DIR / "webhook_log.json"
 SERVER_CONFIG_FILE = DATA_DIR / "server_config.json"
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -91,11 +92,19 @@ def _load_server_config() -> dict:
     return {**defaults, **cfg}
 
 
+def _append_webhook_log(entry: dict, max_entries: int = 100):
+    log = _load_json(WEBHOOK_LOG_FILE, [])
+    log.insert(0, entry)
+    _save_json(WEBHOOK_LOG_FILE, log[:max_entries])
+
+
 # ── Settings blob helpers ─────────────────────────────────────────────────────
-# All setup (home servers, IPTV, addons) is stored in the same blob that syncs
-# to the TV app via GET /api/integration/arvio/settings.
 
 SETUP_PROFILE_ID = "default"
+
+
+def _active_profile_id(blob: dict) -> str:
+    return blob.get("activeProfileId") or SETUP_PROFILE_ID
 
 
 def _get_blob() -> dict:
@@ -115,8 +124,9 @@ def _save_blob(blob: dict):
 
 def _get_connections(blob: dict) -> list:
     try:
+        pid = _active_profile_id(blob)
         json_str = (blob.get("profileSettingsById", {})
-                       .get(SETUP_PROFILE_ID, {})
+                       .get(pid, {})
                        .get("homeServerConnectionJson", ""))
         return json.loads(json_str).get("connections", []) if json_str else []
     except Exception:
@@ -124,29 +134,32 @@ def _get_connections(blob: dict) -> list:
 
 
 def _set_connections(blob: dict, connections: list):
-    blob.setdefault("profileSettingsById", {}).setdefault(SETUP_PROFILE_ID, {})
-    blob["profileSettingsById"][SETUP_PROFILE_ID]["homeServerConnectionJson"] = \
+    pid = _active_profile_id(blob)
+    blob.setdefault("profileSettingsById", {}).setdefault(pid, {})
+    blob["profileSettingsById"][pid]["homeServerConnectionJson"] = \
         json.dumps({"connections": connections})
 
 
 def _get_iptv(blob: dict) -> dict:
-    return blob.get("iptvByProfile", {}).get(SETUP_PROFILE_ID,
-                                             {"m3uUrl": "", "epgUrl": ""})
+    pid = _active_profile_id(blob)
+    return blob.get("iptvByProfile", {}).get(pid, {"m3uUrl": "", "epgUrl": ""})
 
 
 def _set_iptv(blob: dict, m3u_url: str, epg_url: str):
-    blob.setdefault("iptvByProfile", {})[SETUP_PROFILE_ID] = {
-        "m3uUrl": m3u_url, "epgUrl": epg_url}
+    pid = _active_profile_id(blob)
+    blob.setdefault("iptvByProfile", {})[pid] = {"m3uUrl": m3u_url, "epgUrl": epg_url}
     blob["iptvM3uUrl"] = m3u_url
     blob["iptvEpgUrl"] = epg_url
 
 
 def _get_addons(blob: dict) -> list:
-    return blob.get("addonsByProfile", {}).get(SETUP_PROFILE_ID, [])
+    pid = _active_profile_id(blob)
+    return blob.get("addonsByProfile", {}).get(pid, [])
 
 
 def _set_addons(blob: dict, addons: list):
-    blob.setdefault("addonsByProfile", {})[SETUP_PROFILE_ID] = addons
+    pid = _active_profile_id(blob)
+    blob.setdefault("addonsByProfile", {})[pid] = addons
 
 
 # ── Home server auth helpers ──────────────────────────────────────────────────
@@ -204,7 +217,6 @@ def _test_plex(server_url: str, token: str) -> dict:
 
 
 def _tmdb_get(path: str, params: dict | None = None) -> dict | None:
-    # TMDB key lives in the settings blob so it syncs to the app
     key = (_load_json(SETTINGS_FILE, {}).get("tmdb_api_key") or
            os.environ.get("TMDB_API_KEY", ""))
     if not key:
@@ -262,7 +274,7 @@ def save_server_config():
     return jsonify({"ok": True})
 
 
-# ── Sync API (Episeerr-compatible) ────────────────────────────────────────────
+# ── Sync API ──────────────────────────────────────────────────────────────────
 
 @app.route("/api/integration/arvio/settings", methods=["GET"])
 def sync_get_settings():
@@ -314,6 +326,18 @@ def sync_webhook():
     history = history[:500]
     _save_json(HISTORY_FILE, history)
 
+    # Append inbound event to webhook log
+    _append_webhook_log({
+        "timestamp": entry["timestamp"],
+        "event": entry["event"],
+        "url": "inbound",
+        "status_code": 200,
+        "success": True,
+        "error": None,
+        "title": entry["title"],
+        "direction": "inbound",
+    })
+
     # Update live player state
     global _player_state
     ev = event.get("event", "")
@@ -351,13 +375,64 @@ def sync_status():
     })
 
 
+# ── Webhook: test + log ───────────────────────────────────────────────────────
+
+@app.route("/api/webhook/test", methods=["POST"])
+def webhook_test():
+    blob = _load_json(SETTINGS_FILE, {})
+    urls = _resolve_webhook_urls(blob)  # no event filter — test fires to all configured URLs
+    if not urls:
+        return jsonify({"ok": False, "error": "No webhook URLs configured"}), 400
+
+    payload = {
+        "event": "test",
+        "title": "Test Event",
+        "media_type": "episode",
+        "progress_percent": 0,
+    }
+    headers_dict = blob.get("webhook_headers") or {}
+    req_headers = {"Content-Type": "application/json", **headers_dict}
+
+    last_ok, last_status, last_error = False, None, None
+    for url in urls:
+        try:
+            r = requests.post(url, json=payload, headers=req_headers, timeout=5)
+            _append_webhook_log({
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "event": "test",
+                "url": url,
+                "status_code": r.status_code,
+                "success": r.ok,
+                "error": None,
+            })
+            last_ok, last_status = r.ok, r.status_code
+        except Exception as e:
+            _append_webhook_log({
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "event": "test",
+                "url": url,
+                "status_code": None,
+                "success": False,
+                "error": str(e),
+            })
+            last_error = str(e)
+    if last_error and not last_ok:
+        return jsonify({"ok": False, "error": last_error})
+    return jsonify({"ok": last_ok, "status_code": last_status, "url_count": len(urls)})
+
+
+@app.route("/api/webhook/log", methods=["GET"])
+def webhook_log():
+    log = _load_json(WEBHOOK_LOG_FILE, [])
+    return jsonify(log[:20])
+
+
 # ── Setup: home servers ───────────────────────────────────────────────────────
 
 @app.route("/api/setup/servers", methods=["GET"])
 def setup_get_servers():
     blob = _get_blob()
     servers = _get_connections(blob)
-    # Strip accessToken from responses for safety
     safe = [{k: v for k, v in s.items() if k not in ("accessToken", "accountToken")}
             for s in servers]
     return jsonify(safe)
@@ -366,7 +441,7 @@ def setup_get_servers():
 @app.route("/api/setup/servers/connect", methods=["POST"])
 def setup_connect_server():
     body = request.get_json(force=True) or {}
-    kind = body.get("kind", "").upper()          # JELLYFIN, EMBY, PLEX
+    kind = body.get("kind", "").upper()
     server_url = body.get("url", "").rstrip("/")
     display_name = body.get("displayName", "")
 
@@ -477,42 +552,8 @@ def setup_add_addon():
         return jsonify({"error": "url required"}), 400
 
     base_url = manifest_url.rstrip("/")
+    manifest_fetch_url = base_url if base_url.endswith("manifest.json") else base_url + "/manifest.json"
 
-    # If it looks like a plain URL (no manifest.json), probe for Episeerr
-    if not base_url.endswith("manifest.json"):
-        for probe in ["/api/integration/arvio/status", "/api/integration/arvio/watchlist"]:
-            try:
-                r = requests.get(base_url + probe, timeout=10)
-                if r.status_code < 500:
-                    addon = {
-                        "id": "episeerr",
-                        "name": "Episeerr",
-                        "version": "1.0.0",
-                        "description": "Sonarr/Radarr watchlist integration",
-                        "isInstalled": True,
-                        "isEnabled": True,
-                        "type": "EPISEERR",
-                        "runtimeKind": "STREMIO",
-                        "installSource": "DIRECT_URL",
-                        "url": base_url,
-                    }
-                    blob = _get_blob()
-                    addons = _get_addons(blob)
-                    addons = [a for a in addons if a.get("id") != "episeerr"]
-                    addons.insert(0, addon)
-                    _set_addons(blob, addons)
-                    blob["episeerr_url"] = base_url
-                    blob["webhook_url"] = base_url + "/api/integration/arvio/webhook"
-                    blob["webhook_enabled"] = True
-                    _save_blob(blob)
-                    return jsonify({"ok": True, "addon": addon})
-            except Exception:
-                pass
-
-    # Fetch the Stremio manifest
-    manifest_fetch_url = base_url
-    if not manifest_fetch_url.endswith("manifest.json"):
-        manifest_fetch_url = manifest_fetch_url + "/manifest.json"
     try:
         r = requests.get(manifest_fetch_url, timeout=10)
         r.raise_for_status()
@@ -582,56 +623,89 @@ def setup_save_profile():
     return jsonify({"ok": True, "name": name})
 
 
-# ── Setup: Episeerr integration ───────────────────────────────────────────────
-
-@app.route("/api/setup/episeerr", methods=["GET"])
-def setup_get_episeerr():
-    addons = _get_addons(_get_blob())
-    ep = next((a for a in addons if a.get("id") == "episeerr"), None)
-    return jsonify({"url": ep.get("url", "") if ep else ""})
-
-
-@app.route("/api/setup/episeerr", methods=["POST"])
-def setup_save_episeerr():
-    body = request.get_json(force=True) or {}
-    url = body.get("url", "").strip().rstrip("/")
-    if not url:
-        return jsonify({"error": "url required"}), 400
-    addon = {
-        "id": "episeerr",
-        "name": "Episeerr",
-        "version": "1.0.0",
-        "description": "Sonarr/Radarr watchlist integration",
-        "isInstalled": True,
-        "isEnabled": True,
-        "type": "EPISEERR",
-        "runtimeKind": "STREMIO",
-        "installSource": "DIRECT_URL",
-        "url": url,
-    }
-    blob = _get_blob()
-    addons = _get_addons(blob)
-    addons = [a for a in addons if a.get("id") != "episeerr"]
-    addons.insert(0, addon)
-    _set_addons(blob, addons)
-    _save_blob(blob)
-    return jsonify({"ok": True, "url": url})
-
-
-@app.route("/api/setup/episeerr", methods=["DELETE"])
-def setup_delete_episeerr():
-    blob = _get_blob()
-    addons = [a for a in _get_addons(blob) if a.get("id") != "episeerr"]
-    _set_addons(blob, addons)
-    _save_blob(blob)
-    return jsonify({"ok": True})
-
-
 # ── Dashboard: settings (Arvio app settings blob) ────────────────────────────
+
+_ALL_WEBHOOK_EVENTS = ["start", "pause", "resume", "stop", "progress", "watchlist.add", "watchlist.remove"]
+
+_WEBHOOK_DEFAULTS = {
+    "webhook_enabled": False,
+    "webhook_urls": [],
+    "webhook_interval_seconds": "30",
+    "webhook_completion_percent": 80,
+    "webhook_headers": {},
+    "watchlist_api_enabled": False,
+    "watchlist_api_port": "7979",
+}
+
+
+def _resolve_webhook_urls(blob, event_filter=None):
+    """Return list of URL strings from webhook_urls config, optionally filtered by event."""
+    raw = blob.get("webhook_urls") or []
+    if not raw:
+        legacy = blob.get("webhook_url", "").strip()
+        if legacy:
+            raw = [legacy]
+    result = []
+    for entry in raw:
+        if isinstance(entry, str):
+            url = entry.strip()
+            events = _ALL_WEBHOOK_EVENTS
+        else:
+            url = entry.get("url", "").strip()
+            events = entry.get("events", _ALL_WEBHOOK_EVENTS)
+        if url and (event_filter is None or event_filter in events):
+            result.append(url)
+    return result
+
+
+def _fire_watchlist_webhook(event_name, item):
+    """Fire watchlist.add or watchlist.remove to subscribed URLs in background."""
+    blob = _load_json(SETTINGS_FILE, {})
+    if not blob.get("webhook_enabled", False):
+        return
+    urls = _resolve_webhook_urls(blob, event_filter=event_name)
+    if not urls:
+        return
+    headers_dict = blob.get("webhook_headers") or {}
+    req_headers = {"Content-Type": "application/json", **headers_dict}
+    payload = {
+        "event": event_name,
+        "title": item.get("title", ""),
+        "tmdb_id": item.get("id") or item.get("tmdb_id"),
+        "media_type": "movie" if item.get("mediaType") == "movie" else "tv",
+    }
+
+    def _fire():
+        for url in urls:
+            try:
+                r = requests.post(url, json=payload, headers=req_headers, timeout=5)
+                _append_webhook_log({
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "event": event_name,
+                    "url": url,
+                    "status_code": r.status_code,
+                    "success": r.ok,
+                    "error": None,
+                })
+            except Exception as e:
+                _append_webhook_log({
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "event": event_name,
+                    "url": url,
+                    "status_code": None,
+                    "success": False,
+                    "error": str(e),
+                })
+
+    threading.Thread(target=_fire, daemon=True).start()
+
 
 @app.route("/api/settings", methods=["GET"])
 def get_settings():
-    return jsonify(_load_json(SETTINGS_FILE, {}))
+    blob = _load_json(SETTINGS_FILE, {})
+    for k, v in _WEBHOOK_DEFAULTS.items():
+        blob.setdefault(k, v)
+    return jsonify(blob)
 
 
 @app.route("/api/settings", methods=["POST"])
@@ -662,14 +736,19 @@ def add_to_watchlist():
         item["addedAt"] = datetime.utcnow().isoformat() + "Z"
         watchlist.insert(0, item)
         _save_json(WATCHLIST_FILE, watchlist)
+        _fire_watchlist_webhook("watchlist.add", item)
     return jsonify({"ok": True})
 
 
 @app.route("/api/media/watchlist/<media_type>/<int:item_id>", methods=["DELETE"])
 def remove_from_watchlist(media_type, item_id):
     watchlist = _load_json(WATCHLIST_FILE, [])
+    removed = [w for w in watchlist if str(w.get("id")) == str(item_id) and w.get("mediaType", "") == media_type]
     watchlist = [w for w in watchlist if not (str(w.get("id")) == str(item_id) and w.get("mediaType", "") == media_type)]
     _save_json(WATCHLIST_FILE, watchlist)
+    if removed:
+        removed[0]["mediaType"] = media_type
+        _fire_watchlist_webhook("watchlist.remove", removed[0])
     return jsonify({"ok": True})
 
 
@@ -756,7 +835,6 @@ def player_events():
         _sse_queues.append(q)
 
     def generate():
-        # Send current state immediately on connect
         yield "data: " + json.dumps(_player_state) + "\n\n"
         try:
             while True:
@@ -779,7 +857,7 @@ def player_events():
     )
 
 
-# ── Legacy watchlist compat (Episeerr polls this) ─────────────────────────────
+# ── Legacy watchlist endpoint ─────────────────────────────────────────────────
 
 @app.route("/watchlist", methods=["GET"])
 def legacy_watchlist():

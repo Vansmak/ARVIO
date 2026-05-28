@@ -43,11 +43,6 @@ import com.arflix.tv.data.repository.TraktRepository
 import com.arflix.tv.data.repository.TraktSyncService
 import com.arflix.tv.data.repository.WatchlistRepository
 import com.arflix.tv.network.OkHttpProvider
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 import com.arflix.tv.data.repository.SyncProgress
 import com.arflix.tv.data.repository.SyncStatus
 import com.arflix.tv.data.repository.SyncResult
@@ -201,7 +196,7 @@ data class SettingsUiState(
     val aiKeyServerState: AiKeyServerState = AiKeyServerState(),
     // Progress webhook (device-global, not profile-scoped)
     val webhookEnabled: Boolean = false,
-    val webhookUrl: String = "",
+    val webhookUrls: List<com.arflix.tv.data.repository.WebhookUrlConfig> = emptyList(),
     val webhookIntervalSeconds: Int = 30,
     // Watchlist API server
     val watchlistApiEnabled: Boolean = false,
@@ -209,11 +204,6 @@ data class SettingsUiState(
     val webhookCompletionPercent: Int = 90,
     // Arvio sync server URL — arvio-server instance for full settings sync
     val syncServerUrl: String = "",
-    // Episeerr base URL — used for Sonarr/Radarr watchlist integration
-    val episeerrUrl: String = "",
-    val episeerrBackupTimestamp: String? = null,
-    val isRestoringFromEpiseerr: Boolean = false,
-    val isEpiseerrInstalled: Boolean = false,
 )
 
 @HiltViewModel
@@ -305,8 +295,6 @@ class SettingsViewModel @Inject constructor(
     private val webhookUrlKey = com.arflix.tv.data.repository.WEBHOOK_URL_KEY
     private val webhookIntervalKey = com.arflix.tv.data.repository.WEBHOOK_INTERVAL_KEY
     private val webhookCompletionPercentKey = com.arflix.tv.data.repository.WEBHOOK_COMPLETION_PERCENT_KEY
-    private val episeerrUrlKey = com.arflix.tv.data.repository.EPISEERR_URL_KEY
-    private val episeerrBackupTimestampKey = stringPreferencesKey("episeerr_backup_timestamp")
     private val watchlistApiEnabledKey = com.arflix.tv.data.repository.WATCHLIST_API_ENABLED_KEY
     private val watchlistApiPortKey = com.arflix.tv.data.repository.WATCHLIST_API_PORT_KEY
     private fun includeSpecialsKeyFor(profileId: String) = profileManager.profileBooleanKeyFor(profileId, "include_specials")
@@ -483,11 +471,16 @@ class SettingsViewModel @Inject constructor(
             }.getOrDefault(SubtitleAiModel.GROQ_LLAMA_70B)
             val subtitleRemoveHearingImpaired = prefs[subtitleRemoveHearingImpairedKey] ?: true
             val webhookEnabled = prefs[webhookEnabledKey] ?: false
-            val webhookUrl = prefs[webhookUrlKey].orEmpty().trim()
+            val webhookUrlsJson = prefs[com.arflix.tv.data.repository.WEBHOOK_URLS_KEY].orEmpty()
+            val webhookUrls = if (webhookUrlsJson.isNotBlank()) {
+                com.arflix.tv.data.repository.parseWebhookUrlConfigs(webhookUrlsJson)
+            } else {
+                val single = prefs[webhookUrlKey].orEmpty().trim()
+                if (single.isNotBlank()) listOf(com.arflix.tv.data.repository.WebhookUrlConfig(single, com.arflix.tv.data.repository.ALL_WEBHOOK_EVENTS))
+                else emptyList()
+            }
             val webhookIntervalSeconds = prefs[webhookIntervalKey]?.toIntOrNull() ?: 30
             val syncServerUrl = prefs[com.arflix.tv.data.repository.SYNC_SERVER_URL_KEY].orEmpty().trim()
-            val episeerrUrl = prefs[episeerrUrlKey].orEmpty().trim()
-            val episeerrBackupTimestampRaw = prefs[episeerrBackupTimestampKey]
             val watchlistApiEnabled = prefs[watchlistApiEnabledKey] ?: false
             val watchlistApiPort = prefs[watchlistApiPortKey]?.toIntOrNull() ?: com.arflix.tv.server.WebAppServer.DEFAULT_PORT
             val webhookCompletionPercent = prefs[webhookCompletionPercentKey]?.toIntOrNull()?.coerceIn(50, 99) ?: 90
@@ -558,24 +551,13 @@ class SettingsViewModel @Inject constructor(
                 subtitleAiModel = subtitleAiModel,
                 subtitleRemoveHearingImpaired = subtitleRemoveHearingImpaired,
                 webhookEnabled = webhookEnabled,
-                webhookUrl = webhookUrl,
+                webhookUrls = webhookUrls,
                 webhookIntervalSeconds = webhookIntervalSeconds,
                 watchlistApiEnabled = watchlistApiEnabled,
                 watchlistApiPort = watchlistApiPort,
                 webhookCompletionPercent = webhookCompletionPercent,
                 syncServerUrl = syncServerUrl,
-                episeerrUrl = episeerrUrl,
-                episeerrBackupTimestamp = if (episeerrBackupTimestampRaw != null) formatSyncTime(episeerrBackupTimestampRaw) else null,
-                isEpiseerrInstalled = _uiState.value.addons.any { it.id == "episeerr" && it.isEnabled }
             )
-
-            // First-launch auto-restore: Episeerr URL is set but integration settings are blank
-            if (episeerrUrl.isNotBlank() && webhookUrl.isBlank() && !watchlistApiEnabled) {
-                viewModelScope.launch {
-                    delay(1500)
-                    restoreFromEpiseerr(silent = true)
-                }
-            }
         }
     }
 
@@ -616,19 +598,7 @@ class SettingsViewModel @Inject constructor(
                     catalogRepository.syncAddonCatalogs(addons)
                 }
                 if (_uiState.value.addons != addons) {
-                    val wasInstalled = _uiState.value.isEpiseerrInstalled
-                    val episeerrAddon = addons.firstOrNull { it.id == "episeerr" }
-                    val isEpiseerrInstalled = episeerrAddon?.isEnabled == true
-                    val episeerrUrl = when {
-                        isEpiseerrInstalled -> episeerrAddon?.url.orEmpty().ifBlank { _uiState.value.episeerrUrl }
-                        wasInstalled -> "" // just disabled/removed — clear URL per spec
-                        else -> _uiState.value.episeerrUrl
-                    }
-                    _uiState.value = _uiState.value.copy(
-                        addons = addons,
-                        isEpiseerrInstalled = isEpiseerrInstalled,
-                        episeerrUrl = episeerrUrl
-                    )
+                    _uiState.value = _uiState.value.copy(addons = addons)
                 }
             }
         }
@@ -1260,16 +1230,31 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[webhookEnabledKey] = enabled }
             _uiState.value = _uiState.value.copy(webhookEnabled = enabled)
-            backupSettingsToEpiseerr()
         }
     }
 
-    fun saveWebhookUrl(url: String) {
+    private fun saveWebhookUrls(urls: List<com.arflix.tv.data.repository.WebhookUrlConfig>) {
         viewModelScope.launch {
-            context.settingsDataStore.edit { it[webhookUrlKey] = url.trim() }
-            _uiState.value = _uiState.value.copy(webhookUrl = url.trim())
-            backupSettingsToEpiseerr()
+            val json = com.arflix.tv.data.repository.serializeWebhookUrlConfigs(urls)
+            context.settingsDataStore.edit { it[com.arflix.tv.data.repository.WEBHOOK_URLS_KEY] = json }
+            _uiState.value = _uiState.value.copy(webhookUrls = urls)
         }
+    }
+
+    fun addWebhookUrl(url: String, events: Set<String> = com.arflix.tv.data.repository.ALL_WEBHOOK_EVENTS) {
+        if (url.isBlank()) return
+        saveWebhookUrls(_uiState.value.webhookUrls + com.arflix.tv.data.repository.WebhookUrlConfig(url.trim(), events))
+    }
+
+    fun removeWebhookUrl(index: Int) {
+        val updated = _uiState.value.webhookUrls.toMutableList().also { it.removeAt(index) }
+        saveWebhookUrls(updated)
+    }
+
+    fun updateWebhookUrl(index: Int, url: String, events: Set<String>) {
+        val updated = _uiState.value.webhookUrls.toMutableList()
+            .also { it[index] = com.arflix.tv.data.repository.WebhookUrlConfig(url.trim(), events) }
+        saveWebhookUrls(updated)
     }
 
     fun cycleWebhookInterval() {
@@ -1279,7 +1264,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[webhookIntervalKey] = next.toString() }
             _uiState.value = _uiState.value.copy(webhookIntervalSeconds = next)
-            backupSettingsToEpiseerr()
         }
     }
 
@@ -1287,14 +1271,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             cloudSyncRepository.saveSyncServerUrl(url.trim())
             _uiState.value = _uiState.value.copy(syncServerUrl = url.trim())
-        }
-    }
-
-    fun saveEpiseerrUrl(url: String) {
-        viewModelScope.launch {
-            context.settingsDataStore.edit { it[episeerrUrlKey] = url.trim() }
-            _uiState.value = _uiState.value.copy(episeerrUrl = url.trim())
-            backupSettingsToEpiseerr()
         }
     }
 
@@ -1307,7 +1283,6 @@ class SettingsViewModel @Inject constructor(
             } else {
                 webAppServer.stop()
             }
-            backupSettingsToEpiseerr()
         }
     }
 
@@ -1319,7 +1294,6 @@ class SettingsViewModel @Inject constructor(
             if (_uiState.value.watchlistApiEnabled) {
                 webAppServer.start(clamped)
             }
-            backupSettingsToEpiseerr()
         }
     }
 
@@ -1328,119 +1302,6 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             context.settingsDataStore.edit { it[webhookCompletionPercentKey] = clamped.toString() }
             _uiState.value = _uiState.value.copy(webhookCompletionPercent = clamped)
-            backupSettingsToEpiseerr()
-        }
-    }
-
-    // ── Episeerr Settings Backup / Restore ────────────────────────────────────
-
-    private fun backupSettingsToEpiseerr() {
-        val baseUrl = _uiState.value.episeerrUrl.trim().trimEnd('/')
-        if (baseUrl.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val s = _uiState.value
-                val payload = JSONObject().apply {
-                    put("webhook_url", s.webhookUrl)
-                    put("webhook_enabled", s.webhookEnabled)
-                    put("webhook_interval_seconds", s.webhookIntervalSeconds)
-                    put("watchlist_api_enabled", s.watchlistApiEnabled)
-                    put("watchlist_port", s.watchlistApiPort)
-                    put("home_server_urls", JSONArray(s.homeServerConnections.map { it.serverUrl }))
-                    put("trakt_connected", s.isTraktAuthenticated)
-                    put("backup_timestamp", java.time.Instant.now().toString())
-                }
-                val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder()
-                    .url("$baseUrl/api/integration/arvio/settings/backup")
-                    .post(body)
-                    .build()
-                OkHttpProvider.client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        val now = java.time.Instant.now().toString()
-                        context.settingsDataStore.edit { it[episeerrBackupTimestampKey] = now }
-                        val formatted = formatSyncTime(now)
-                        _uiState.value = _uiState.value.copy(episeerrBackupTimestamp = formatted)
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("Arvio", "Episeerr settings backup failed: ${e.message}")
-            }
-        }
-    }
-
-    fun restoreFromEpiseerr(silent: Boolean = false) {
-        val baseUrl = _uiState.value.episeerrUrl.trim().trimEnd('/')
-        if (baseUrl.isBlank()) {
-            if (!silent) {
-                _uiState.value = _uiState.value.copy(
-                    toastMessage = "Episeerr URL not configured",
-                    toastType = ToastType.ERROR
-                )
-            }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRestoringFromEpiseerr = true)
-            try {
-                val bodyStr = withContext(Dispatchers.IO) {
-                    val req = Request.Builder()
-                        .url("$baseUrl/api/integration/arvio/settings/backup")
-                        .get()
-                        .build()
-                    OkHttpProvider.client.newCall(req).execute().use { resp ->
-                        if (!resp.isSuccessful) return@withContext null
-                        resp.body?.string()
-                    }
-                }
-                if (bodyStr == null) {
-                    _uiState.value = _uiState.value.copy(isRestoringFromEpiseerr = false)
-                    if (!silent) {
-                        _uiState.value = _uiState.value.copy(
-                            toastMessage = "No backup found on Episeerr",
-                            toastType = ToastType.ERROR
-                        )
-                    }
-                    return@launch
-                }
-                val backup = JSONObject(bodyStr)
-                // success: false means no backup stored
-                if (!backup.optBoolean("success", true) && !backup.has("webhook_url")) {
-                    _uiState.value = _uiState.value.copy(isRestoringFromEpiseerr = false)
-                    return@launch
-                }
-                val s = _uiState.value
-                if (s.webhookUrl.isBlank()) {
-                    val wUrl = backup.optString("webhook_url", "")
-                    if (wUrl.isNotBlank()) saveWebhookUrl(wUrl)
-                }
-                if (!s.webhookEnabled && backup.optBoolean("webhook_enabled", false)) {
-                    setWebhookEnabled(true)
-                }
-                val interval = backup.optInt("webhook_interval_seconds", 0)
-                if (interval > 0 && s.webhookIntervalSeconds == 30) {
-                    context.settingsDataStore.edit { it[webhookIntervalKey] = interval.toString() }
-                    _uiState.value = _uiState.value.copy(webhookIntervalSeconds = interval)
-                }
-                if (!s.watchlistApiEnabled && backup.optBoolean("watchlist_api_enabled", false)) {
-                    setWatchlistApiEnabled(true)
-                }
-                val port = backup.optInt("watchlist_port", 0)
-                if (port > 0 && s.watchlistApiPort == com.arflix.tv.server.WebAppServer.DEFAULT_PORT) {
-                    saveWatchlistApiPort(port)
-                }
-                _uiState.value = _uiState.value.copy(
-                    isRestoringFromEpiseerr = false,
-                    toastMessage = if (!silent) "Settings restored from Episeerr" else null,
-                    toastType = ToastType.SUCCESS
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    isRestoringFromEpiseerr = false,
-                    toastMessage = if (!silent) "Restore failed: ${e.message}" else null,
-                    toastType = ToastType.ERROR
-                )
-            }
         }
     }
 
@@ -1693,13 +1554,9 @@ class SettingsViewModel @Inject constructor(
                 runCatching {
                     catalogRepository.syncAddonCatalogs(currentAddons)
                 }
-                val isEpiseerr = addon.id == "episeerr"
                 _uiState.value = _uiState.value.copy(
                     addons = currentAddons,
-                    isEpiseerrInstalled = if (isEpiseerr) true else _uiState.value.isEpiseerrInstalled,
-                    episeerrUrl = if (isEpiseerr) addon.url.orEmpty() else _uiState.value.episeerrUrl,
                     toastMessage = when {
-                        isEpiseerr -> "Episeerr connected — integration settings are now visible"
                         importedCatalogs > 0 -> "Added ${addon.name} ($importedCatalogs catalogs imported)"
                         else -> "Added ${addon.name} (no catalogs exposed)"
                     },

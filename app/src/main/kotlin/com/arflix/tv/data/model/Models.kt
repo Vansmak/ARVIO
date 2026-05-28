@@ -273,7 +273,7 @@ data class Addon(
 )
 
 enum class AddonType {
-    OFFICIAL, COMMUNITY, SUBTITLE, METADATA, CUSTOM, INTEGRATION
+    OFFICIAL, COMMUNITY, SUBTITLE, METADATA, CUSTOM
 }
 
 enum class RuntimeKind {

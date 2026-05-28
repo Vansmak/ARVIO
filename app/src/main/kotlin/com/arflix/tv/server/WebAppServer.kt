@@ -5,7 +5,6 @@ import android.util.Log
 import com.arflix.tv.data.api.TmdbApi
 import com.arflix.tv.data.model.MediaItem
 import com.arflix.tv.data.model.MediaType
-import com.arflix.tv.data.repository.EPISEERR_URL_KEY
 import com.arflix.tv.data.repository.HomeServerRepository
 import com.arflix.tv.data.repository.IptvRepository
 import com.arflix.tv.data.repository.SYNC_SERVER_URL_KEY
@@ -106,7 +105,6 @@ class WebAppServer @Inject constructor(
                     serveAsset("web/index.html", "text/html; charset=utf-8")
                 method == NanoHTTPD.Method.GET && uri.startsWith("/assets/") ->
                     serveAsset("web/${uri.removePrefix("/assets/")}", mimeFor(uri))
-                // Legacy Episeerr compat
                 method == NanoHTTPD.Method.GET && uri == "/watchlist" ->
                     serveWatchlistLegacy()
                 // Settings
@@ -158,7 +156,6 @@ class WebAppServer @Inject constructor(
             put("webhook_interval_seconds", prefs[WEBHOOK_INTERVAL_KEY] ?: "30")
             put("watchlist_api_enabled", prefs[WATCHLIST_API_ENABLED_KEY] ?: false)
             put("watchlist_api_port", prefs[WATCHLIST_API_PORT_KEY] ?: DEFAULT_PORT.toString())
-            put("episeerr_url", prefs[EPISEERR_URL_KEY] ?: "")
             put("sync_server_url", prefs[SYNC_SERVER_URL_KEY] ?: "")
         })
     }
@@ -173,7 +170,6 @@ class WebAppServer @Inject constructor(
             if (body.has("webhook_url")) prefs[WEBHOOK_URL_KEY] = body.getString("webhook_url")
             if (body.has("webhook_interval_seconds")) prefs[WEBHOOK_INTERVAL_KEY] = body.getString("webhook_interval_seconds")
             if (body.has("watchlist_api_port")) prefs[WATCHLIST_API_PORT_KEY] = body.getString("watchlist_api_port")
-            if (body.has("episeerr_url")) prefs[EPISEERR_URL_KEY] = body.getString("episeerr_url")
             if (body.has("sync_server_url")) prefs[SYNC_SERVER_URL_KEY] = body.getString("sync_server_url")
         }
         return json(JSONObject().put("status", "ok"))

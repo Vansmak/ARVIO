@@ -377,6 +377,7 @@ fun LiveTvScreen(
     var focusSelectedChannelSignal by remember { mutableIntStateOf(0) }
     var focusEpgSignal by remember { mutableIntStateOf(0) }
     var focusSearchCategorySignal by remember { mutableIntStateOf(1) }
+    var focusCategorySignal by remember { mutableIntStateOf(0) }
     val rememberedChannelByCategory = remember { mutableMapOf<String, String>() }
     // Full-screen playback mode — pressing OK on an EPG row expands the
     // mini-player to cover the whole screen. Back collapses back to the grid.
@@ -440,6 +441,12 @@ fun LiveTvScreen(
     fun focusPlaylistSearch() {
         focusZone = LiveTvFocusZone.CATEGORY_LIST
         focusSearchCategorySignal += 1
+        runCatching { sidebarFocus.requestFocus() }
+    }
+
+    fun focusFirstCategory() {
+        focusZone = LiveTvFocusZone.CATEGORY_LIST
+        focusCategorySignal += 1
         runCatching { sidebarFocus.requestFocus() }
     }
 
@@ -598,10 +605,10 @@ fun LiveTvScreen(
         }
     }
 
-    // Default focus to the category search rail on load.
+    // Default focus to the first category row (Favorites or All) on load.
     LaunchedEffect(enrichedState.value !== EnrichedChannels.Empty) {
         if (!isTouchDevice && enrichedState.value !== EnrichedChannels.Empty) {
-            focusPlaylistSearch()
+            focusFirstCategory()
         }
     }
 
@@ -798,6 +805,7 @@ fun LiveTvScreen(
                         focusZone = LiveTvFocusZone.TOPBAR
                     },
                     focusSearchSignal = focusSearchCategorySignal,
+                    focusFirstCategorySignal = focusCategorySignal,
                     modifier = Modifier
                         .fillMaxHeight()
                         .padding(top = contentTopPadding)

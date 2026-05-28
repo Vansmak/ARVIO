@@ -342,11 +342,10 @@ fun SettingsScreen(
     var showAiModelDialog by remember { mutableStateOf(false) }
     var showAiApiKeyDialog by remember { mutableStateOf(false) }
     var showCustomUserAgentDialog by remember { mutableStateOf(false) }
-    var showWebhookUrlDialog by remember { mutableStateOf(false) }
+    var webhookUrlDialogIndex by remember { mutableStateOf<Int?>(null) }
     var showWatchlistApiPortDialog by remember { mutableStateOf(false) }
     var showWebhookCompletionDialog by remember { mutableStateOf(false) }
     var showSyncServerUrlDialog by remember { mutableStateOf(false) }
-    var showEpiseerrUrlDialog by remember { mutableStateOf(false) }
     var qualityFilterRegexPattern by remember { mutableStateOf("") }
     var showHomeServerInput by remember { mutableStateOf(false) }
     var showPlexHomeServerInput by remember { mutableStateOf(false) }
@@ -382,7 +381,7 @@ fun SettingsScreen(
             "iptv" -> 2 + uiState.iptvPlaylists.size // Add + rows + refresh + clear
             "home_server" -> uiState.homeServerConnections.size + 3
             "catalogs" -> uiState.catalogs.size // Add + rows
-            "stremio" -> stremioAddons.size + 6 // addons + add button + 6 integration settings
+            "stremio" -> stremioAddons.size + 6 + uiState.webhookUrls.size // addons + add button + URL rows + 5 integration settings + add-URL button
             "accounts" -> 4
             else -> 0
         }
@@ -613,11 +612,10 @@ fun SettingsScreen(
         showAiModelDialog ||
         showAiApiKeyDialog ||
         showCustomUserAgentDialog ||
-        showWebhookUrlDialog ||
+        webhookUrlDialogIndex != null ||
         showWatchlistApiPortDialog ||
         showWebhookCompletionDialog ||
         showSyncServerUrlDialog ||
-        showEpiseerrUrlDialog ||
         uiState.aiKeyServerState.isActive ||
         uiState.showCloudPairDialog ||
         uiState.showCloudEmailPasswordDialog ||
@@ -944,11 +942,13 @@ fun SettingsScreen(
                                                     showCustomAddonInput = true
                                                 }
                                                 contentFocusIndex == stremioAddons.size + 1 -> viewModel.setWebhookEnabled(!uiState.webhookEnabled)
-                                                contentFocusIndex == stremioAddons.size + 2 -> showWebhookUrlDialog = true
-                                                contentFocusIndex == stremioAddons.size + 3 -> viewModel.cycleWebhookInterval()
-                                                contentFocusIndex == stremioAddons.size + 4 -> viewModel.setWatchlistApiEnabled(!uiState.watchlistApiEnabled)
-                                                contentFocusIndex == stremioAddons.size + 5 -> showWatchlistApiPortDialog = true
-                                                contentFocusIndex == stremioAddons.size + 6 -> showWebhookCompletionDialog = true
+                                                contentFocusIndex in (stremioAddons.size + 2)..(stremioAddons.size + 1 + uiState.webhookUrls.size) ->
+                                                    webhookUrlDialogIndex = contentFocusIndex - (stremioAddons.size + 2)
+                                                contentFocusIndex == stremioAddons.size + 2 + uiState.webhookUrls.size -> webhookUrlDialogIndex = -1
+                                                contentFocusIndex == stremioAddons.size + 3 + uiState.webhookUrls.size -> viewModel.cycleWebhookInterval()
+                                                contentFocusIndex == stremioAddons.size + 4 + uiState.webhookUrls.size -> viewModel.setWatchlistApiEnabled(!uiState.watchlistApiEnabled)
+                                                contentFocusIndex == stremioAddons.size + 5 + uiState.webhookUrls.size -> showWatchlistApiPortDialog = true
+                                                contentFocusIndex == stremioAddons.size + 6 + uiState.webhookUrls.size -> showWebhookCompletionDialog = true
                                             }
                                         }
                                         "accounts" -> {
@@ -1028,11 +1028,10 @@ fun SettingsScreen(
                 },
                 onAddCustomAddonClick = { showCustomAddonInput = true },
                 openCustomUserAgentDialog = { showCustomUserAgentDialog = true },
-                onShowWebhookUrlDialog = { showWebhookUrlDialog = true },
+                onShowWebhookUrlDialog = { idx -> webhookUrlDialogIndex = idx },
                 onShowWatchlistApiPortDialog = { showWatchlistApiPortDialog = true },
                 onShowWebhookCompletionDialog = { showWebhookCompletionDialog = true },
-                onShowSyncServerUrlDialog = { showSyncServerUrlDialog = true },
-                onShowEpiseerrUrlDialog = { showEpiseerrUrlDialog = true }
+                onShowSyncServerUrlDialog = { showSyncServerUrlDialog = true }
             )
         } else {
             AppTopBar(
@@ -1359,13 +1358,13 @@ fun SettingsScreen(
                             onDeleteAddon = { viewModel.removeAddon(it) },
                             onAddCustomAddon = { showCustomAddonInput = true },
                             webhookEnabled = uiState.webhookEnabled,
-                            webhookUrl = uiState.webhookUrl,
+                            webhookUrls = uiState.webhookUrls,
                             webhookIntervalSeconds = uiState.webhookIntervalSeconds,
                             watchlistApiEnabled = uiState.watchlistApiEnabled,
                             watchlistApiPort = uiState.watchlistApiPort,
                             webhookCompletionPercent = uiState.webhookCompletionPercent,
                             onToggleWebhook = { viewModel.setWebhookEnabled(!uiState.webhookEnabled) },
-                            onWebhookUrlClick = { showWebhookUrlDialog = true },
+                            onWebhookUrlClick = { idx -> webhookUrlDialogIndex = idx },
                             onCycleInterval = { viewModel.cycleWebhookInterval() },
                             onToggleWatchlistApi = { viewModel.setWatchlistApiEnabled(!uiState.watchlistApiEnabled) },
                             onWatchlistPortClick = { showWatchlistApiPortDialog = true },
@@ -1398,14 +1397,19 @@ fun SettingsScreen(
             }
         }
 
-        if (showWebhookUrlDialog) {
+        webhookUrlDialogIndex?.let { idx ->
+            val isNew = idx < 0
+            val existing = if (isNew) null else uiState.webhookUrls.getOrNull(idx)
             WebhookUrlDialog(
-                currentValue = uiState.webhookUrl,
-                onSave = { url ->
-                    viewModel.saveWebhookUrl(url)
-                    showWebhookUrlDialog = false
+                currentValue = existing?.url ?: "",
+                currentEvents = existing?.events ?: com.arflix.tv.data.repository.ALL_WEBHOOK_EVENTS,
+                onSave = { url, events ->
+                    if (isNew) viewModel.addWebhookUrl(url, events)
+                    else viewModel.updateWebhookUrl(idx, url, events)
+                    webhookUrlDialogIndex = null
                 },
-                onDismiss = { showWebhookUrlDialog = false }
+                onDelete = if (isNew) null else ({ viewModel.removeWebhookUrl(idx); webhookUrlDialogIndex = null }),
+                onDismiss = { webhookUrlDialogIndex = null }
             )
         }
 
@@ -1428,17 +1432,6 @@ fun SettingsScreen(
                     showSyncServerUrlDialog = false
                 },
                 onDismiss = { showSyncServerUrlDialog = false }
-            )
-        }
-
-        if (showEpiseerrUrlDialog) {
-            EpiseerrUrlDialog(
-                currentValue = uiState.episeerrUrl,
-                onSave = { url ->
-                    viewModel.saveEpiseerrUrl(url)
-                    showEpiseerrUrlDialog = false
-                },
-                onDismiss = { showEpiseerrUrlDialog = false }
             )
         }
 
@@ -1814,15 +1807,22 @@ fun SettingsScreen(
             )
         }
 
-        if (isTouchDevice && showWebhookUrlDialog) {
-            WebhookUrlDialog(
-                currentValue = uiState.webhookUrl,
-                onSave = { url ->
-                    viewModel.saveWebhookUrl(url)
-                    showWebhookUrlDialog = false
-                },
-                onDismiss = { showWebhookUrlDialog = false }
-            )
+        if (isTouchDevice) {
+            webhookUrlDialogIndex?.let { idx ->
+                val isNew = idx < 0
+                val existing = if (isNew) null else uiState.webhookUrls.getOrNull(idx)
+                WebhookUrlDialog(
+                    currentValue = existing?.url ?: "",
+                    currentEvents = existing?.events ?: com.arflix.tv.data.repository.ALL_WEBHOOK_EVENTS,
+                    onSave = { url, events ->
+                        if (isNew) viewModel.addWebhookUrl(url, events)
+                        else viewModel.updateWebhookUrl(idx, url, events)
+                        webhookUrlDialogIndex = null
+                    },
+                    onDelete = if (isNew) null else ({ viewModel.removeWebhookUrl(idx); webhookUrlDialogIndex = null }),
+                    onDismiss = { webhookUrlDialogIndex = null }
+                )
+            }
         }
 
         if (isTouchDevice && showWatchlistApiPortDialog) {
@@ -1855,17 +1855,6 @@ fun SettingsScreen(
                     showSyncServerUrlDialog = false
                 },
                 onDismiss = { showSyncServerUrlDialog = false }
-            )
-        }
-
-        if (isTouchDevice && showEpiseerrUrlDialog) {
-            EpiseerrUrlDialog(
-                currentValue = uiState.episeerrUrl,
-                onSave = { url ->
-                    viewModel.saveEpiseerrUrl(url)
-                    showEpiseerrUrlDialog = false
-                },
-                onDismiss = { showEpiseerrUrlDialog = false }
             )
         }
 
@@ -3145,11 +3134,10 @@ private fun MobileSettingsLayout(
     onConnectPlexHomeServerClick: () -> Unit,
     onAddCustomAddonClick: () -> Unit,
     openCustomUserAgentDialog: () -> Unit = {},
-    onShowWebhookUrlDialog: () -> Unit = {},
+    onShowWebhookUrlDialog: (Int?) -> Unit = {},
     onShowWatchlistApiPortDialog: () -> Unit = {},
     onShowWebhookCompletionDialog: () -> Unit = {},
-    onShowSyncServerUrlDialog: () -> Unit = {},
-    onShowEpiseerrUrlDialog: () -> Unit = {}
+    onShowSyncServerUrlDialog: () -> Unit = {}
 ) {
     BackHandler(enabled = page != "MAIN") {
         onNavigate("MAIN")
@@ -3191,8 +3179,7 @@ private fun MobileSettingsLayout(
                 openSecondarySubtitlePicker = openSecondarySubtitlePicker,
                 openAudioLanguagePicker = openAudioLanguagePicker,
                 onSwitchProfile = onSwitchProfile,
-                onShowSyncServerUrlDialog = onShowSyncServerUrlDialog,
-                onShowEpiseerrUrlDialog = onShowEpiseerrUrlDialog
+                onShowSyncServerUrlDialog = onShowSyncServerUrlDialog
             )
         } else {
             Row(
@@ -3254,8 +3241,7 @@ private fun MobileSettingsMainPage(
     openSecondarySubtitlePicker: () -> Unit = {},
     openAudioLanguagePicker: () -> Unit,
     onSwitchProfile: () -> Unit,
-    onShowSyncServerUrlDialog: () -> Unit = {},
-    onShowEpiseerrUrlDialog: () -> Unit = {}
+    onShowSyncServerUrlDialog: () -> Unit = {}
 ) {
     androidx.compose.foundation.lazy.LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -3374,28 +3360,9 @@ private fun MobileSettingsMainPage(
                     subtitle = "V${BuildConfig.VERSION_NAME}",
                     value = if (uiState.updateStatus is com.arflix.tv.updater.UpdateStatus.UpdateAvailable) "Update Available" else "Check Updates",
                     isFocused = false,
-                    showDivider = uiState.isEpiseerrInstalled,
+                    showDivider = false,
                     onClick = { viewModel.checkForAppUpdates(force = true, showNoUpdateFeedback = true) }
                 )
-                if (uiState.isEpiseerrInstalled) {
-                    MobileSettingsRow(
-                        icon = Icons.Default.Link,
-                        title = "Episeerr",
-                        subtitle = "Sonarr/Radarr watchlist integration",
-                        value = if (uiState.episeerrUrl.isBlank()) "Not set" else "Set",
-                        isFocused = false,
-                        onClick = onShowEpiseerrUrlDialog
-                    )
-                    MobileSettingsRow(
-                        icon = Icons.Default.ContentPaste,
-                        title = "Restore from Episeerr",
-                        subtitle = if (uiState.episeerrBackupTimestamp != null) "Last backup: ${uiState.episeerrBackupTimestamp}" else "Restore settings from Episeerr backup",
-                        value = if (uiState.isRestoringFromEpiseerr) "..." else "Restore",
-                        isFocused = false,
-                        showDivider = false,
-                        onClick = { if (!uiState.isRestoringFromEpiseerr) viewModel.restoreFromEpiseerr() }
-                    )
-                }
             }
         }
     }
@@ -3421,7 +3388,7 @@ private fun MobileSettingsSubPage(
     onConnectPlexHomeServerClick: () -> Unit,
     onAddCustomAddonClick: () -> Unit,
     openCustomUserAgentDialog: () -> Unit = {},
-    onShowWebhookUrlDialog: () -> Unit = {},
+    onShowWebhookUrlDialog: (Int?) -> Unit = {},
     onShowWatchlistApiPortDialog: () -> Unit = {},
     onShowWebhookCompletionDialog: () -> Unit = {}
 ) {
@@ -3711,7 +3678,7 @@ private fun MobileSettingsSubPage(
                     onDeleteAddon = { viewModel.removeAddon(it) },
                     onAddCustomAddon = onAddCustomAddonClick,
                     webhookEnabled = uiState.webhookEnabled,
-                    webhookUrl = uiState.webhookUrl,
+                    webhookUrls = uiState.webhookUrls,
                     webhookIntervalSeconds = uiState.webhookIntervalSeconds,
                     watchlistApiEnabled = uiState.watchlistApiEnabled,
                     watchlistApiPort = uiState.watchlistApiPort,
@@ -4310,7 +4277,7 @@ private fun tvSettingsSectionDescription(section: String): String {
         "home_server" -> "Connect personal media servers and use their libraries as sources."
         "catalogs" -> "Discover, rename, order and remove home rows and list catalogs."
         "stremio" -> "Manage third-party addon sources."
-        "accounts" -> "Cloud sync, Trakt, Episeerr integration, app updates and account controls."
+        "accounts" -> "Cloud sync, Trakt, app updates and account controls."
         else -> "Configure ARVIO for this profile."
     }
 }
@@ -4359,8 +4326,7 @@ private fun tvSettingsSectionPills(
             if (uiState.watchlistApiEnabled) "API :${uiState.watchlistApiPort}" else "API off"
         )
         "accounts" -> listOf(
-            if (uiState.isTraktAuthenticated) "Trakt connected" else "Trakt off",
-            if (uiState.episeerrUrl.isBlank()) "Episeerr off" else "Episeerr set"
+            if (uiState.isTraktAuthenticated) "Trakt connected" else "Trakt off"
         )
         else -> emptyList()
     }
@@ -4422,8 +4388,7 @@ private fun tvSettingsPanelFacts(
             "Watchlist API" to if (uiState.watchlistApiEnabled) "Port ${uiState.watchlistApiPort}" else "Off"
         )
         "accounts" -> listOf(
-            "Trakt" to if (uiState.isTraktAuthenticated) "Connected" else "Disconnected",
-            "Episeerr" to if (uiState.episeerrUrl.isBlank()) "Not set" else "Set"
+            "Trakt" to if (uiState.isTraktAuthenticated) "Connected" else "Disconnected"
         )
         else -> emptyList()
     }
@@ -4478,9 +4443,8 @@ private fun tvSettingsFocusedHelp(section: String, focusedIndex: Int): TvSetting
             0 -> TvSettingsHelp("Trakt", "Connect or disconnect Trakt watch history and lists.")
             1 -> TvSettingsHelp("Force sync", "Push/pull the latest synced profile data with the sync server.")
             2 -> TvSettingsHelp("App updates", "Check for sideload app updates or install a downloaded update.")
-            4 -> TvSettingsHelp("Episeerr", "Set the Episeerr base URL for media management and watchlist integration.")
-            5 -> TvSettingsHelp("Restore from Episeerr", "Pull saved integration settings back from Episeerr.")
-            else -> TvSettingsHelp("Account data", "Open account and data deletion information.")
+            4 -> TvSettingsHelp("Privacy & data", "Open privacy and account deletion information.")
+            else -> TvSettingsHelp("Account data", "Cloud sync, Trakt, updates and account controls.")
         }
         else -> TvSettingsHelp("Setting", "Use OK to change this option.")
     }
@@ -7283,13 +7247,13 @@ private fun StremioAddonsSettings(
     onDeleteAddon: (String) -> Unit = {},
     onAddCustomAddon: () -> Unit = {},
     webhookEnabled: Boolean = false,
-    webhookUrl: String = "",
+    webhookUrls: List<com.arflix.tv.data.repository.WebhookUrlConfig> = emptyList(),
     webhookIntervalSeconds: Int = 30,
     watchlistApiEnabled: Boolean = false,
     watchlistApiPort: Int = com.arflix.tv.server.WebAppServer.DEFAULT_PORT,
     webhookCompletionPercent: Int = 90,
     onToggleWebhook: () -> Unit = {},
-    onWebhookUrlClick: () -> Unit = {},
+    onWebhookUrlClick: (Int?) -> Unit = {},
     onCycleInterval: () -> Unit = {},
     onToggleWatchlistApi: () -> Unit = {},
     onWatchlistPortClick: () -> Unit = {},
@@ -7381,17 +7345,55 @@ private fun StremioAddonsSettings(
             modifier = Modifier.settingsFocusSlot(addons.size + 1)
         )
 
+        // Dynamic webhook URL rows
+        webhookUrls.forEachIndexed { i, config ->
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingsRow(
+                icon = Icons.Default.Link,
+                title = "Webhook URL ${i + 1}",
+                subtitle = config.url,
+                value = "${config.events.size} events",
+                isFocused = focusedIndex == addons.size + 2 + i,
+                onClick = { onWebhookUrlClick(i) },
+                modifier = Modifier.settingsFocusSlot(addons.size + 2 + i)
+            )
+        }
+
         Spacer(modifier = Modifier.height(12.dp))
 
-        SettingsRow(
-            icon = Icons.Default.Link,
-            title = "Webhook URL",
-            subtitle = if (webhookUrl.isBlank()) "Not set" else webhookUrl,
-            value = if (webhookUrl.isBlank()) "Set" else "",
-            isFocused = focusedIndex == addons.size + 2,
-            onClick = onWebhookUrlClick,
-            modifier = Modifier.settingsFocusSlot(addons.size + 2)
-        )
+        // Add Webhook URL button
+        val addUrlIndex = addons.size + 2 + webhookUrls.size
+        Row(
+            modifier = Modifier
+                .settingsFocusSlot(addUrlIndex)
+                .fillMaxWidth()
+                .clickable { onWebhookUrlClick(null) }
+                .background(
+                    if (focusedIndex == addUrlIndex) Color.White.copy(alpha = 0.1f) else BackgroundElevated,
+                    RoundedCornerShape(12.dp)
+                )
+                .border(
+                    width = if (focusedIndex == addUrlIndex) 2.dp else 0.dp,
+                    color = if (focusedIndex == addUrlIndex) Pink else Color.Transparent,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                tint = Pink,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = "Add Webhook URL",
+                style = ArflixTypography.button,
+                color = Pink
+            )
+        }
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -7400,9 +7402,9 @@ private fun StremioAddonsSettings(
             title = "Webhook Interval",
             subtitle = "How often to fire progress events",
             value = "${webhookIntervalSeconds}s",
-            isFocused = focusedIndex == addons.size + 3,
+            isFocused = focusedIndex == addons.size + 3 + webhookUrls.size,
             onClick = onCycleInterval,
-            modifier = Modifier.settingsFocusSlot(addons.size + 3)
+            modifier = Modifier.settingsFocusSlot(addons.size + 3 + webhookUrls.size)
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -7412,9 +7414,9 @@ private fun StremioAddonsSettings(
             title = "Watchlist API",
             subtitle = "Serve watchlist JSON over LAN",
             value = if (watchlistApiEnabled) "On :${watchlistApiPort}" else "Off",
-            isFocused = focusedIndex == addons.size + 4,
+            isFocused = focusedIndex == addons.size + 4 + webhookUrls.size,
             onClick = onToggleWatchlistApi,
-            modifier = Modifier.settingsFocusSlot(addons.size + 4)
+            modifier = Modifier.settingsFocusSlot(addons.size + 4 + webhookUrls.size)
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -7424,9 +7426,9 @@ private fun StremioAddonsSettings(
             title = "Watchlist API Port",
             subtitle = "Port for the LAN watchlist server",
             value = watchlistApiPort.toString(),
-            isFocused = focusedIndex == addons.size + 5,
+            isFocused = focusedIndex == addons.size + 5 + webhookUrls.size,
             onClick = onWatchlistPortClick,
-            modifier = Modifier.settingsFocusSlot(addons.size + 5)
+            modifier = Modifier.settingsFocusSlot(addons.size + 5 + webhookUrls.size)
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -7436,9 +7438,9 @@ private fun StremioAddonsSettings(
             title = "Watched Threshold",
             subtitle = "Mark as watched at this progress %",
             value = "${webhookCompletionPercent}%",
-            isFocused = focusedIndex == addons.size + 6,
+            isFocused = focusedIndex == addons.size + 6 + webhookUrls.size,
             onClick = onCompletionPercentClick,
-            modifier = Modifier.settingsFocusSlot(addons.size + 6)
+            modifier = Modifier.settingsFocusSlot(addons.size + 6 + webhookUrls.size)
         )
 
     }
@@ -9251,12 +9253,26 @@ private fun WebhookCompletionPercentDialog(
 @Composable
 private fun WebhookUrlDialog(
     currentValue: String,
-    onSave: (String) -> Unit,
+    currentEvents: Set<String> = com.arflix.tv.data.repository.ALL_WEBHOOK_EVENTS,
+    onSave: (String, Set<String>) -> Unit,
+    onDelete: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val isMobile = LocalDeviceType.current.isTouchDevice()
     var value by remember(currentValue) { mutableStateOf(currentValue) }
+    var selectedEvents by remember(currentEvents) { mutableStateOf(currentEvents.toMutableSet() as Set<String>) }
     val inputFocusRequester = remember { FocusRequester() }
+
+    val eventOptions = listOf(
+        "start" to "Playback Start",
+        "pause" to "Pause",
+        "resume" to "Resume",
+        "stop" to "Stop",
+        "progress" to "Progress",
+        "watchlist.add" to "Watchlist Add",
+        "watchlist.remove" to "Watchlist Remove",
+    )
+
     BackHandler { onDismiss() }
     LaunchedEffect(Unit) {
         kotlinx.coroutines.delay(100)
@@ -9273,10 +9289,14 @@ private fun WebhookUrlDialog(
                 .background(BackgroundElevated)
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
-                Text(text = "Webhook URL", style = ArflixTypography.sectionTitle, color = TextPrimary)
+                Text(
+                    text = if (onDelete != null) "Edit Webhook URL" else "Add Webhook URL",
+                    style = ArflixTypography.sectionTitle,
+                    color = TextPrimary
+                )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Arvio will POST JSON progress events here during playback.",
+                    text = "POST to this URL for each selected event type.",
                     style = ArflixTypography.caption,
                     color = TextSecondary
                 )
@@ -9294,37 +9314,121 @@ private fun WebhookUrlDialog(
                         unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
                     )
                 )
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Event checkboxes — two columns
+                Text(text = "Events", style = ArflixTypography.caption, color = TextSecondary)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val col1 = eventOptions.take(4)
+                    val col2 = eventOptions.drop(4)
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        col1.forEach { (key, label) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    selectedEvents = if (key in selectedEvents) selectedEvents - key else selectedEvents + key
+                                }.padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.material3.Checkbox(
+                                    checked = key in selectedEvents,
+                                    onCheckedChange = { checked ->
+                                        selectedEvents = if (checked) selectedEvents + key else selectedEvents - key
+                                    },
+                                    colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                        checkedColor = Pink,
+                                        checkmarkColor = androidx.compose.ui.graphics.Color.White,
+                                        uncheckedColor = TextSecondary
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(text = label, style = ArflixTypography.caption, color = TextPrimary)
+                            }
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        col2.forEach { (key, label) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    selectedEvents = if (key in selectedEvents) selectedEvents - key else selectedEvents + key
+                                }.padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.material3.Checkbox(
+                                    checked = key in selectedEvents,
+                                    onCheckedChange = { checked ->
+                                        selectedEvents = if (checked) selectedEvents + key else selectedEvents - key
+                                    },
+                                    colors = androidx.compose.material3.CheckboxDefaults.colors(
+                                        checkedColor = Pink,
+                                        checkmarkColor = androidx.compose.ui.graphics.Color.White,
+                                        uncheckedColor = TextSecondary
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(text = label, style = ArflixTypography.caption, color = TextPrimary)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     val cancelFocus = remember { FocusRequester() }
                     val saveFocus = remember { FocusRequester() }
-                    Surface(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f).focusRequester(cancelFocus).pointerInput(Unit) {
-                            detectTapGestures(onTap = { onDismiss() })
-                        },
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = BackgroundElevated,
-                            focusedContainerColor = BackgroundElevated.copy(alpha = 0.8f)
-                        ),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        border = ClickableSurfaceDefaults.border(
-                            border = androidx.tv.material3.Border(
-                                border = androidx.compose.foundation.BorderStroke(1.dp, TextSecondary.copy(alpha = 0.3f))
+                    if (onDelete != null) {
+                        Surface(
+                            onClick = onDelete,
+                            modifier = Modifier.weight(1f).pointerInput(Unit) {
+                                detectTapGestures(onTap = { onDelete() })
+                            },
+                            colors = ClickableSurfaceDefaults.colors(
+                                containerColor = androidx.compose.ui.graphics.Color(0xFFCC0000).copy(alpha = 0.15f),
+                                focusedContainerColor = androidx.compose.ui.graphics.Color(0xFFCC0000).copy(alpha = 0.25f)
+                            ),
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                            border = ClickableSurfaceDefaults.border(
+                                border = androidx.tv.material3.Border(
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, androidx.compose.ui.graphics.Color(0xFFCC0000).copy(alpha = 0.4f))
+                                )
                             )
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(R.string.cancel),
-                            modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            color = TextSecondary
-                        )
+                        ) {
+                            Text(
+                                text = "Delete",
+                                modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                color = androidx.compose.ui.graphics.Color(0xFFFF4444)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f).focusRequester(cancelFocus).pointerInput(Unit) {
+                                detectTapGestures(onTap = { onDismiss() })
+                            },
+                            colors = ClickableSurfaceDefaults.colors(
+                                containerColor = BackgroundElevated,
+                                focusedContainerColor = BackgroundElevated.copy(alpha = 0.8f)
+                            ),
+                            shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
+                            border = ClickableSurfaceDefaults.border(
+                                border = androidx.tv.material3.Border(
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, TextSecondary.copy(alpha = 0.3f))
+                                )
+                            )
+                        ) {
+                            Text(
+                                text = stringResource(R.string.cancel),
+                                modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                color = TextSecondary
+                            )
+                        }
                     }
                     Surface(
-                        onClick = { onSave(value) },
+                        onClick = { onSave(value, selectedEvents) },
                         modifier = Modifier.weight(1f).focusRequester(saveFocus).pointerInput(Unit) {
-                            detectTapGestures(onTap = { onSave(value) })
+                            detectTapGestures(onTap = { onSave(value, selectedEvents) })
                         },
                         colors = ClickableSurfaceDefaults.colors(
                             containerColor = Pink.copy(alpha = 0.15f),
@@ -9392,112 +9496,6 @@ private fun SyncServerUrlDialog(
                     value = value,
                     onValueChange = { value = it },
                     placeholder = { Text("http://192.168.1.x:7979", color = TextSecondary.copy(alpha = 0.4f)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().focusRequester(inputFocusRequester),
-                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedBorderColor = Pink,
-                        unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
-                    )
-                )
-                Spacer(modifier = Modifier.height(20.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    val cancelFocus = remember { FocusRequester() }
-                    val saveFocus = remember { FocusRequester() }
-                    Surface(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f).focusRequester(cancelFocus).pointerInput(Unit) {
-                            detectTapGestures(onTap = { onDismiss() })
-                        },
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = BackgroundElevated,
-                            focusedContainerColor = BackgroundElevated.copy(alpha = 0.8f)
-                        ),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        border = ClickableSurfaceDefaults.border(
-                            border = androidx.tv.material3.Border(
-                                border = androidx.compose.foundation.BorderStroke(1.dp, TextSecondary.copy(alpha = 0.3f))
-                            )
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(R.string.cancel),
-                            modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            color = TextSecondary
-                        )
-                    }
-                    Surface(
-                        onClick = { onSave(value) },
-                        modifier = Modifier.weight(1f).focusRequester(saveFocus).pointerInput(Unit) {
-                            detectTapGestures(onTap = { onSave(value) })
-                        },
-                        colors = ClickableSurfaceDefaults.colors(
-                            containerColor = Pink.copy(alpha = 0.15f),
-                            focusedContainerColor = Pink.copy(alpha = 0.25f)
-                        ),
-                        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(8.dp)),
-                        border = ClickableSurfaceDefaults.border(
-                            border = androidx.tv.material3.Border(
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Pink.copy(alpha = 0.4f))
-                            )
-                        )
-                    ) {
-                        Text(
-                            text = stringResource(R.string.save),
-                            modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth(),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            color = Pink
-                        )
-                    }
-                    LaunchedEffect(Unit) {
-                        kotlinx.coroutines.delay(150)
-                        inputFocusRequester.requestFocus()
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EpiseerrUrlDialog(
-    currentValue: String,
-    onSave: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val isMobile = LocalDeviceType.current.isTouchDevice()
-    var value by remember(currentValue) { mutableStateOf(currentValue) }
-    val inputFocusRequester = remember { FocusRequester() }
-    BackHandler { onDismiss() }
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(100)
-        inputFocusRequester.requestFocus()
-    }
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Box(
-            modifier = Modifier
-                .then(
-                    if (isMobile) Modifier.fillMaxWidth().padding(horizontal = 16.dp)
-                    else Modifier.width(520.dp)
-                )
-                .clip(RoundedCornerShape(16.dp))
-                .background(BackgroundElevated)
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
-                Text(text = "Episeerr URL", style = ArflixTypography.sectionTitle, color = TextPrimary)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Base URL of your Episeerr instance. Used for Sonarr/Radarr watchlist integration.",
-                    style = ArflixTypography.caption,
-                    color = TextSecondary
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                androidx.compose.material3.OutlinedTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    placeholder = { Text("http://192.168.1.x:5000", color = TextSecondary.copy(alpha = 0.4f)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().focusRequester(inputFocusRequester),
                     colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(

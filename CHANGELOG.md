@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.13] - 2026-05-27
+
+### Added
+- **Generic webhook system** — multiple webhook URLs, each with its own event selection. Different endpoints can subscribe to different events.
+- **Webhook event types:** Playback Start, Pause, Resume, Stop, Progress, Watchlist Add, Watchlist Remove.
+- **Watchlist webhooks** — adding or removing a watchlist item (on any device) fires `watchlist.add` / `watchlist.remove` to all subscribed URLs.
+- `WebhookUrlConfig` data class replaces bare URL strings; includes URL + `events: Set<String>` for per-URL filtering.
+- **LAN watchlist API server** — configurable port (default 7979); toggle and port visible in Plugins & Extensions.
+- **Sync-server watchlist sync** — watchlist add/remove notifies the sync server in real time; watchlist is merged from the sync server on settings restore.
+- **JF / Emby / Plex session reporting** — `ServerSessionRepository` reports playback progress to the connected home server during playback (ticks for Jellyfin/Emby, timeline for Plex).
+- **TV guide focus** — guide opens on the Favorites/All category row instead of the search bar.
+- **IPTV guide text** — channel list and guide text sizes increased for couch viewing.
+
+### Changed
+- **Self-hosted sync server** replaces ARVIO Cloud / Supabase. Connect to Server on the profile screen pulls all settings from your own arvio-server instance. No cloud account required.
+- **TMDB and Trakt direct API calls** — the Supabase Edge Function proxy is no longer used. TMDB requests pass through with a direct API key; Trakt adds its required headers directly.
+- **Episeerr-specific plugin model removed** — webhook system is now generic and works with any HTTP endpoint. Episeerr can still receive webhooks via the standard URL config.
+- **Integration settings** always visible in Plugins & Extensions — no longer gated on any plugin being installed.
+
 ## [2.0.12] - 2026-05-26
 
 ### Changed

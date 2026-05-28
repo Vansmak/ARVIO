@@ -12,12 +12,12 @@ import com.arflix.tv.data.repository.USER_TMDB_API_KEY
 import com.arflix.tv.data.repository.USER_TRAKT_CLIENT_ID
 import com.arflix.tv.data.repository.USER_TRAKT_CLIENT_SECRET
 import com.arflix.tv.data.repository.WEBHOOK_URL_KEY
+import com.arflix.tv.data.repository.WEBHOOK_URLS_KEY
 import com.arflix.tv.data.repository.WEBHOOK_ENABLED_KEY
 import com.arflix.tv.data.repository.WEBHOOK_INTERVAL_KEY
 import com.arflix.tv.data.repository.WEBHOOK_COMPLETION_PERCENT_KEY
 import com.arflix.tv.data.repository.WATCHLIST_API_ENABLED_KEY
 import com.arflix.tv.data.repository.WATCHLIST_API_PORT_KEY
-import com.arflix.tv.data.repository.EPISEERR_URL_KEY
 import com.arflix.tv.network.OkHttpProvider
 import com.arflix.tv.ui.components.CARD_LAYOUT_MODE_LANDSCAPE
 import com.arflix.tv.ui.components.catalogueRowLayoutKeyFromPreferenceName
@@ -131,7 +131,7 @@ class CloudSyncRepository @Inject constructor(
 
     /**
      * Verifies [url] is a reachable Arvio-compatible sync server by calling
-     * /api/integration/arvio/status (the Episeerr blueprint status endpoint).
+     * /api/integration/arvio/status.
      * Returns true if the server responds with HTTP 200.
      */
     suspend fun verifySyncServer(url: String): Boolean {
@@ -492,13 +492,12 @@ class CloudSyncRepository @Inject constructor(
         prefs[USER_TRAKT_CLIENT_ID]?.takeIf { it.isNotBlank() }?.let { root.put("trakt_client_id", it) }
         prefs[USER_TRAKT_CLIENT_SECRET]?.takeIf { it.isNotBlank() }?.let { root.put("trakt_client_secret", it) }
         prefs[WEBHOOK_URL_KEY]?.takeIf { it.isNotBlank() }?.let { root.put("webhook_url", it) }
+        prefs[WEBHOOK_URLS_KEY]?.takeIf { it.isNotBlank() }?.let { root.put("webhook_urls", org.json.JSONArray(it)) }
         prefs[WEBHOOK_INTERVAL_KEY]?.takeIf { it.isNotBlank() }?.let { root.put("webhook_interval_seconds", it) }
         prefs[WEBHOOK_COMPLETION_PERCENT_KEY]?.takeIf { it.isNotBlank() }?.let { root.put("webhook_completion_percent", it) }
         root.put("webhook_enabled", prefs[WEBHOOK_ENABLED_KEY] ?: false)
         root.put("watchlist_api_enabled", prefs[WATCHLIST_API_ENABLED_KEY] ?: false)
         prefs[WATCHLIST_API_PORT_KEY]?.takeIf { it.isNotBlank() }?.let { root.put("watchlist_api_port", it) }
-        prefs[EPISEERR_URL_KEY]?.takeIf { it.isNotBlank() }?.let { root.put("episeerr_url", it) }
-
         root.put("activeProfileId", profileRepository.getActiveProfileId() ?: JSONObject.NULL)
         root.put("profiles", JSONArray(gson.toJson(profiles)))
         val existingAvatarImagesById = syncServerLoadPayload()
@@ -1043,18 +1042,18 @@ class CloudSyncRepository @Inject constructor(
         val webhookInterval = root.optString("webhook_interval_seconds", "")
         val watchlistEnabled = root.opt("watchlist_api_enabled")
         val watchlistPort   = root.optString("watchlist_api_port", "")
-        val episeerrUrl     = root.optString("episeerr_url", "")
         if (webhookUrl.isNotBlank() || webhookEnabled != null || webhookInterval.isNotBlank() ||
-            watchlistEnabled != null || watchlistPort.isNotBlank() || episeerrUrl.isNotBlank()) {
+            watchlistEnabled != null || watchlistPort.isNotBlank()) {
             context.settingsDataStore.edit { prefs ->
                 if (webhookUrl.isNotBlank())      prefs[WEBHOOK_URL_KEY]           = webhookUrl
+                val webhookUrls = root.optJSONArray("webhook_urls")?.toString()?.takeIf { it != "null" }
+                if (!webhookUrls.isNullOrBlank()) prefs[WEBHOOK_URLS_KEY] = webhookUrls
                 if (webhookEnabled != null)       prefs[WEBHOOK_ENABLED_KEY]       = webhookEnabled as? Boolean ?: (webhookEnabled.toString() == "true")
                 if (webhookInterval.isNotBlank()) prefs[WEBHOOK_INTERVAL_KEY]      = webhookInterval
                 val completionPct = root.optString("webhook_completion_percent", "")
                 if (completionPct.isNotBlank()) prefs[WEBHOOK_COMPLETION_PERCENT_KEY] = completionPct
                 if (watchlistEnabled != null)     prefs[WATCHLIST_API_ENABLED_KEY] = watchlistEnabled as? Boolean ?: (watchlistEnabled.toString() == "true")
                 if (watchlistPort.isNotBlank())   prefs[WATCHLIST_API_PORT_KEY]    = watchlistPort
-                if (episeerrUrl.isNotBlank())     prefs[EPISEERR_URL_KEY]          = episeerrUrl
             }
         }
 
@@ -1196,6 +1195,8 @@ class CloudSyncRepository @Inject constructor(
                 watchlistRepository.importWatchlistForProfile(profileId, items)
             }
         }
+        // Merge sync-server watchlist on top of restored local state
+        repositoryScope.launch { watchlistRepository.syncFromSyncServer() }
 
         // ── Dismissed Continue Watching ──
         root.optJSONObject("dismissedContinueWatchingByProfile")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
