@@ -73,6 +73,8 @@
     <string name="next_episode">Next Episode</string>
     <string name="next">Next</string>
     <string name="live">Live</string>
+    <string name="play_full_screen">Play Full Screen</string>
+    <string name="tv_guide">TV Guide</string>
     <string name="now">Now</string>
     <string name="later">Later</string>
     <string name="ends_at">Ends at</string>

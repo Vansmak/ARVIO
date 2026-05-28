@@ -50,6 +50,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
@@ -98,7 +99,10 @@ data class HomeUiState(
     // App Updates
     val updateStatus: com.arflix.tv.updater.UpdateStatus = com.arflix.tv.updater.UpdateStatus.Idle,
     val showAppUpdateDialog: Boolean = false,
-    val hasUpdateBadge: Boolean = false
+    val hasUpdateBadge: Boolean = false,
+    // EPG data for the Live TV / On Now home row, keyed by MediaItem stable ID.
+    // Updated by refreshFavoriteTvEpg() whenever now/next data changes.
+    val liveChannelEpg: Map<Int, com.arflix.tv.data.model.IptvNowNext> = emptyMap(),
 )
 
 data class HomeCollectionRow(
@@ -157,8 +161,12 @@ class HomeViewModel @Inject constructor(
         var isLoading: Boolean = false
     )
 
-    // IPTV favorite channels — maps MediaItem.id (Int hash) to channel data
+    // IPTV favorite channels — maps MediaItem.id (Int hash) to channel / EPG data
     private val iptvChannelMap = mutableMapOf<Int, com.arflix.tv.data.model.IptvChannel>()
+    private val iptvNowNextMap = mutableMapOf<Int, com.arflix.tv.data.model.IptvNowNext>()
+    // Last successfully built On Now category — used as fallback when loadHomeData()
+    // races with a snapshot refresh and buildFavoriteTvCategory() transiently returns null.
+    @Volatile private var lastFavoriteTvCategory: Category? = null
 
     companion object {
         const val FAVORITE_TV_CATEGORY_ID = "favorite_tv"
@@ -444,12 +452,16 @@ class HomeViewModel @Inject constructor(
     /** Get the stream URL for an IPTV MediaItem. */
     fun getIptvStreamUrl(itemId: Int): String? = iptvChannelMap[itemId]?.streamUrl
 
+    /** Get the current EPG (now/next) for an IPTV MediaItem. Updated by the EPG refresh timer. */
+    fun getLiveChannelEpg(itemId: Int): com.arflix.tv.data.model.IptvNowNext? = iptvNowNextMap[itemId]
+
     private fun iptvChannelToMediaItem(
         channel: com.arflix.tv.data.model.IptvChannel,
         epg: com.arflix.tv.data.model.IptvNowNext?
     ): MediaItem {
         val stableId = channel.id.hashCode() and 0x7FFFFFFF
         iptvChannelMap[stableId] = channel
+        if (epg != null) iptvNowNextMap[stableId] = epg else iptvNowNextMap.remove(stableId)
 
         val nowProgram = epg?.now
         val nextProgram = epg?.next ?: epg?.later ?: epg?.upcoming?.firstOrNull()
@@ -514,9 +526,9 @@ class HomeViewModel @Inject constructor(
 
         return Category(
             id = FAVORITE_TV_CATEGORY_ID,
-            title = "Favorite TV",
+            title = "On Now",
             items = items
-        )
+        ).also { lastFavoriteTvCategory = it }
     }
 
     private fun isCustomCatalogConfig(cfg: CatalogConfig): Boolean {
@@ -564,27 +576,12 @@ class HomeViewModel @Inject constructor(
                 val favTvIndex = categories.indexOfFirst { it.id == FAVORITE_TV_CATEGORY_ID }
 
                 if (favTvIndex < 0) {
-                    // Row not yet in the list — try to build and insert it now.
-                    // This handles the case where IPTV channels loaded after the initial
-                    // home data fetch (e.g. fresh install, expired cache, slow network).
-                    val newCategory = withContext(Dispatchers.IO) {
-                        runCatching { buildFavoriteTvCategory() }.getOrNull()
-                    } ?: return@launch
-                    val cfg = savedCatalogById[FAVORITE_TV_CATEGORY_ID]
-                    val titled = if (cfg != null && cfg.title.isNotBlank() && cfg.title != newCategory.title) {
-                        newCategory.copy(title = cfg.title)
-                    } else {
-                        newCategory
-                    }
-                    withContext(Dispatchers.Main.immediate) {
-                        val current = _uiState.value.categories.toMutableList()
-                        if (current.none { it.id == FAVORITE_TV_CATEGORY_ID }) {
-                            // Insert right after ContinueWatching (or at position 0)
-                            val cwIdx = current.indexOfFirst { it.id == "continue_watching" }
-                            current.add(if (cwIdx >= 0) cwIdx + 1 else 0, titled)
-                            _uiState.value = _uiState.value.copy(categories = current)
-                        }
-                    }
+                    // Row missing — delegate to the reactive builder which handles
+                    // snapshot availability correctly.
+                    val favIds = runCatching {
+                        iptvRepository.observeFavoriteChannels().first().toHashSet()
+                    }.getOrNull() ?: emptySet()
+                    if (favIds.isNotEmpty()) attemptBuildOnNowRow(favIds)
                     return@launch
                 }
 
@@ -628,7 +625,10 @@ class HomeViewModel @Inject constructor(
                     val idx = current.indexOfFirst { it.id == FAVORITE_TV_CATEGORY_ID }
                     if (idx >= 0) {
                         current[idx] = titled
-                        _uiState.value = _uiState.value.copy(categories = current)
+                        _uiState.value = _uiState.value.copy(
+                            categories = current,
+                            liveChannelEpg = iptvNowNextMap.toMap(),
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -641,8 +641,9 @@ class HomeViewModel @Inject constructor(
     private fun startEpgRefreshTimer() {
         epgRefreshJob?.cancel()
         epgRefreshJob = viewModelScope.launch {
-            // Initial delay — let home data + IPTV warmup finish first
-            delay(if (isLowRamDevice) 10_000L else 5_000L)
+            // Short initial delay — fire quickly after home loads.
+            // refreshFavoriteTvEpg() handles the "row missing" case itself.
+            delay(if (isLowRamDevice) 4_000L else 2_000L)
             var tickCount = 0L
             while (true) {
                 tickCount++
@@ -1123,19 +1124,10 @@ class HomeViewModel @Inject constructor(
                 }
         }
 
-        // When IPTV favorites change (user added a first favorite, or favorites loaded
-        // from DataStore after a cold start), try inserting the Favorite TV row if it
-        // isn't in the home list yet. This handles the common case where IPTV loads
-        // after the initial home fetch and buildFavoriteTvCategory() returned null.
-        viewModelScope.launch {
-            iptvRepository.observeFavoriteChannels()
-                .distinctUntilChanged { a, b -> a.size == b.size }
-                .collect {
-                    if (_uiState.value.categories.isNotEmpty()) {
-                        refreshFavoriteTvEpg(networkFetch = false)
-                    }
-                }
-        }
+        // Reactive On Now row builder — runs independently of loadHomeData().
+        // Warmup IPTV from disk cache first so the snapshot is ready, then react
+        // to favorite channel changes and insert/update the row when data is available.
+        launchOnNowRowObserver()
 
         // Reactively inject the watchlist row whenever watchlist items change.
         viewModelScope.launch {
@@ -1731,6 +1723,104 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun launchServerResumeFetch() {
+        // Server resume rows removed — library rows cover the same content sorted by recent.
+        // Remove any in-memory rows directly; do NOT call publishServerResume/syncServerResumeCatalogEntries
+        // since that writes to DataStore, triggering observeCatalogs → loadHomeData() and potentially
+        // losing the favorite_tv row during the rebuild race.
+        serverResumeFetchJob?.cancel()
+        serverResumeFetchJob = viewModelScope.launch(Dispatchers.Main) {
+            val current = _uiState.value.categories.toMutableList()
+            if (current.removeAll { it.id.startsWith("server_resume_") }) {
+                _uiState.value = _uiState.value.copy(categories = current)
+            }
+        }
+    }
+
+    /**
+     * Reactive On Now row pipeline.
+     *
+     * Runs completely independently of loadHomeData():
+     *  1. Warm up IPTV from disk cache immediately (no network, fast).
+     *  2. Observe favorite channel IDs from DataStore. Every time the list changes
+     *     (including the first emission at subscription time), attempt to build the row.
+     *  3. Retry with backoff for cold starts where the disk cache is empty — this covers
+     *     the case where the user hasn't opened the TV guide yet this session.
+     *
+     * loadHomeData() only *preserves* the row, never builds or removes it.
+     */
+    private fun launchOnNowRowObserver() {
+        // Primary: react to favorites changes (covers disk-warm starts and favorite toggles).
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { iptvRepository.warmupFromCacheOnly() }
+            iptvRepository.observeFavoriteChannels()
+                .distinctUntilChanged()
+                .collectLatest { favoriteIds ->
+                    if (favoriteIds.isEmpty()) return@collectLatest
+                    attemptBuildOnNowRow(favoriteIds.toHashSet())
+                }
+        }
+        // Backoff retry for cold starts: disk cache empty, snapshot arrives later
+        // (e.g. after user opens TV guide or after prefetchFreshStartupData runs).
+        viewModelScope.launch(Dispatchers.IO) {
+            for (delayMs in listOf(3_000L, 8_000L, 20_000L, 60_000L)) {
+                delay(delayMs)
+                if (_uiState.value.categories.any { it.id == FAVORITE_TV_CATEGORY_ID }) return@launch
+                val favIds = runCatching {
+                    iptvRepository.observeFavoriteChannels().first().toHashSet()
+                }.getOrNull() ?: emptySet()
+                if (favIds.isEmpty()) continue
+                attemptBuildOnNowRow(favIds)
+            }
+        }
+    }
+
+    /**
+     * Attempt to build the On Now row from the current IPTV snapshot.
+     * Silently no-ops if the snapshot isn't ready or has no matching favorites.
+     * Inserts the row if absent; updates items in-place if already present.
+     */
+    private suspend fun attemptBuildOnNowRow(favoriteIds: Set<String>) {
+        val snapshot = iptvRepository.getMemoryCachedSnapshot()
+            ?: runCatching { iptvRepository.getCachedSnapshotOrNull() }.getOrNull()
+            ?: return
+
+        val channels = snapshot.channels.filter { favoriteIds.contains(it.id) }
+        if (channels.isEmpty()) return
+
+        val channelIdSet = channels.map { it.id }.toSet()
+        iptvRepository.reDeriveCachedNowNext(channelIdSet)
+        val fresh = iptvRepository.getMemoryCachedSnapshot() ?: snapshot
+
+        val items = channels.mapNotNull { channel ->
+            val epg = fresh.nowNext[channel.id]
+            iptvChannelToMediaItem(channel, epg)
+        }.distinctBy { "${it.mediaType.name}-${it.id}" }
+
+        if (items.isEmpty()) return
+
+        val cfg = savedCatalogById[FAVORITE_TV_CATEGORY_ID]
+        val title = if (cfg != null && cfg.title.isNotBlank()) cfg.title else "On Now"
+        val category = Category(id = FAVORITE_TV_CATEGORY_ID, title = title, items = items)
+        lastFavoriteTvCategory = category
+
+        withContext(Dispatchers.Main) {
+            val current = _uiState.value.categories.toMutableList()
+            val idx = current.indexOfFirst { it.id == FAVORITE_TV_CATEGORY_ID }
+            if (idx >= 0) {
+                current[idx] = category
+            } else {
+                val cwIdx = current.indexOfFirst { it.id == "continue_watching" }
+                current.add(if (cwIdx >= 0) cwIdx + 1 else 0, category)
+            }
+            _uiState.value = _uiState.value.copy(
+                categories = current,
+                liveChannelEpg = iptvNowNextMap.toMap()
+            )
+        }
+    }
+
+    @Suppress("unused")
+    private fun launchServerResumeFetchImpl() {
         serverResumeFetchJob?.cancel()
         serverResumeFetchJob = viewModelScope.launch(Dispatchers.IO) {
             val items = runCatching {
@@ -1767,14 +1857,38 @@ class HomeViewModel @Inject constructor(
     }
 
     private suspend fun publishServerResume(categories: List<Category>) {
+        // Register entries in savedCatalogs so they appear in Catalog ordering settings.
+        val entries = categories.map { it.id to it.title }
+        runCatching { catalogRepository.syncServerResumeCatalogEntries(entries) }
+
         withContext(Dispatchers.Main) {
             val current = _uiState.value.categories.toMutableList()
-            current.removeAll { it.id.startsWith("server_resume_") }
-            if (categories.isNotEmpty()) {
+            val newById = categories.associateBy { it.id }
+
+            // Update items in-place for existing rows (preserves user-set ordering).
+            var idx = 0
+            while (idx < current.size) {
+                val cat = current[idx]
+                val updated = newById[cat.id]
+                if (updated != null) {
+                    current[idx] = updated
+                } else if (cat.id.startsWith("server_resume_")) {
+                    // Server no longer returning this connection — remove it.
+                    current.removeAt(idx)
+                    idx--
+                }
+                idx++
+            }
+
+            // Insert brand-new rows (first time we've seen this connection) after CW.
+            val presentIds = current.map { it.id }.toHashSet()
+            val newRows = categories.filter { it.id !in presentIds }
+            if (newRows.isNotEmpty()) {
                 val cwIdx = current.indexOfFirst { it.id == "continue_watching" }
                 val insertIdx = if (cwIdx >= 0) cwIdx + 1 else 0
-                current.addAll(insertIdx, categories)
+                current.addAll(insertIdx, newRows)
             }
+
             _uiState.value = _uiState.value.copy(categories = current)
         }
     }
@@ -1881,10 +1995,13 @@ class HomeViewModel @Inject constructor(
                 val currentBaseCategories = _uiState.value.categories.filter {
                     it.id != "continue_watching" && !it.id.startsWith("collection_row_")
                 }
-                // Build Favorite TV category from IPTV cache (runs on IO)
-                val favoriteTvCategory = withContext(Dispatchers.IO) {
-                    runCatching { buildFavoriteTvCategory() }.getOrNull()
-                }
+                // On Now row is managed entirely by launchOnNowRowObserver() — never
+                // build or remove it here. Preserve whatever is already in state or the
+                // last successfully built copy so catalog reloads never wipe the row.
+                val preservedOnNow = currentBaseCategories
+                    .firstOrNull { it.id == FAVORITE_TV_CATEGORY_ID }
+                    ?.takeIf { it.items.isNotEmpty() }
+                    ?: lastFavoriteTvCategory
 
                 var categories = withContext(networkDispatcher) {
                     val baseCategories = runCatching {
@@ -1894,13 +2011,11 @@ class HomeViewModel @Inject constructor(
                     val baseById = LinkedHashMap<String, Category>().apply {
                         currentBaseCategories.forEach { put(it.id, it) }
                         baseCategories.forEach { put(it.id, it) }
-                        // Inject Favorite TV so catalog ordering picks it up, or remove
-                        // stale skeleton/placeholder if no favorites exist for this profile.
-                        if (favoriteTvCategory != null) {
-                            put(FAVORITE_TV_CATEGORY_ID, favoriteTvCategory)
-                        } else {
-                            remove(FAVORITE_TV_CATEGORY_ID)
+                        if (preservedOnNow != null) {
+                            put(FAVORITE_TV_CATEGORY_ID, preservedOnNow)
                         }
+                        // If neither exists, omit — launchOnNowRowObserver() will insert
+                        // it once the IPTV snapshot is populated.
                     }
 
                     // Split preinstalled into TMDB-based and MDBList-based
@@ -2157,6 +2272,23 @@ class HomeViewModel @Inject constructor(
                     )
                     categories.add(0, cwCat)
                 }
+                // Re-inject "Continue on <Server>" rows — they're dynamically added
+                // by launchServerResumeFetch() and not part of savedCatalogs, so they
+                // get wiped on every categories rebuild. Preserve the last-known rows
+                // so they stay visible during reloads; launchServerResumeFetch() will
+                // refresh them when it fires.
+                val existingServerResume = _uiState.value.categories
+                    .filter { it.id.startsWith("server_resume_") && it.items.isNotEmpty() }
+                if (existingServerResume.isNotEmpty()) {
+                    val cwIdx = categories.indexOfFirst { it.id == "continue_watching" }
+                    var insertIdx = if (cwIdx >= 0) cwIdx + 1 else 0
+                    existingServerResume.forEach { row ->
+                        if (categories.none { it.id == row.id }) {
+                            categories.add(insertIdx++, row)
+                        }
+                    }
+                }
+
                 // Inject watchlist row right after Continue Watching
                 val cachedWatchlistItems = watchlistRepository.getCachedItems()
                 if (cachedWatchlistItems.isNotEmpty()) {
@@ -2300,6 +2432,7 @@ class HomeViewModel @Inject constructor(
                     heroItem = heroItem,
                     heroLogoUrl = heroLogoUrl,
                     isAuthenticated = traktRepository.isAuthenticated.first(),
+                    liveChannelEpg = iptvNowNextMap.toMap(),
                     error = null
                 )
                 heroItem?.let { item ->
@@ -2327,6 +2460,24 @@ class HomeViewModel @Inject constructor(
                         for (i in initialLogoPrefetchRows until categories.size) {
                             preloadLogosForCategory(i, prioritizeVisible = false)
                             delay(300L) // Stagger to avoid API rate limiting
+                        }
+                    }
+                }
+
+                // If the Favorite TV / On Now row is missing (IPTV snapshot not yet in
+                // memory when home data loaded), retry in the background after a short
+                // delay so the row appears once IPTV finishes loading from disk cache.
+                if (_uiState.value.categories.none { it.id == FAVORITE_TV_CATEGORY_ID }) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        // Try immediately — IPTV cache may just need a moment to settle
+                        refreshFavoriteTvEpg(networkFetch = false)
+                        if (_uiState.value.categories.none { it.id == FAVORITE_TV_CATEGORY_ID }) {
+                            delay(2_000L)
+                            refreshFavoriteTvEpg(networkFetch = false)
+                        }
+                        if (_uiState.value.categories.none { it.id == FAVORITE_TV_CATEGORY_ID }) {
+                            delay(8_000L)
+                            refreshFavoriteTvEpg(networkFetch = false)
                         }
                     }
                 }

@@ -30,6 +30,10 @@ Example uses:
 
 **Direct API calls** — TMDB and Trakt are called directly with your own API keys. The Supabase Edge Function proxy is no longer used.
 
+**Live TV mini-player** — the IPTV stream keeps playing in a picture-in-picture tile (top-right corner) when you navigate away from the TV guide. Tap the tile to return to full screen; Back dismisses it. Opening a VOD player stops the stream entirely.
+
+**On Now home row** — favorited IPTV channels appear as a dedicated row on the home screen showing the current program, progress bar, and time remaining. The row is built reactively once the IPTV cache is warm and survives navigation and catalog reloads. Channels without logos show a colored initial tile instead of a blank card. Single press starts the channel in the mini-player; long press opens full-screen TV or TV guide.
+
 ---
 
 ## Repository Purpose

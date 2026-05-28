@@ -132,6 +132,7 @@ import com.arflix.tv.ui.components.CardLayoutMode
 import com.arflix.tv.ui.components.AppTopBar
 import com.arflix.tv.ui.components.AppTopBarContentTopInset
 import com.arflix.tv.util.LocalDeviceType
+import com.arflix.tv.ui.components.LiveTvContextMenu
 import com.arflix.tv.ui.components.MediaContextMenu
 import com.arflix.tv.ui.components.rememberCardLayoutMode
 import com.arflix.tv.ui.components.rememberCatalogueRowLayoutMode
@@ -547,6 +548,8 @@ fun HomeScreen(
     // Called when Back is pressed and the mini-player overlay is active; returns true to
     // signal that the back event was consumed (mini-player dismissed), false otherwise.
     onInterceptBack: (() -> Boolean)? = null,
+    // Called when user selects a channel from the On Now home row — plays in mini-player.
+    onPlayChannelInMiniPlayer: ((streamUrl: String, channelId: String, channelName: String, programTitle: String) -> Unit)? = null,
 ) {
     val isMobile = LocalDeviceType.current.isTouchDevice()
 
@@ -695,6 +698,18 @@ fun HomeScreen(
         contextMenuIsContinueWatching = false
     }
 
+    // Live TV context menu state (long-press on On Now row)
+    var showLiveTvContextMenu by remember { mutableStateOf(false) }
+    var liveTvContextChannelId by remember { mutableStateOf<String?>(null) }
+    var liveTvContextStreamUrl by remember { mutableStateOf<String?>(null) }
+    var liveTvContextChannelName by remember { mutableStateOf("") }
+
+    BackHandler(enabled = showLiveTvContextMenu) {
+        showLiveTvContextMenu = false
+        liveTvContextChannelId = null
+        liveTvContextStreamUrl = null
+    }
+
     // Preload artwork for the focused row and the next rows soon after DPAD settles.
     LaunchedEffect(allowHomeBackgroundWork) {
         if (!allowHomeBackgroundWork) return@LaunchedEffect
@@ -752,6 +767,8 @@ fun HomeScreen(
                 if (categoriesSnapshot.isEmpty() || focusState.isSidebarFocused) return@collectLatest
                 if (focusSnapshot.focusedItemKey.isBlank()) return@collectLatest
                 if (focusSnapshot.focusedItemKey == focusSnapshot.heroItemKey) return@collectLatest
+                // Don't update the hero backdrop when the user is browsing the On Now live TV row
+                if (categoriesSnapshot.getOrNull(focusSnapshot.rowIndex)?.id == "favorite_tv") return@collectLatest
                 categoriesSnapshot.getOrNull(focusSnapshot.rowIndex)
                     ?.items
                     ?.getOrNull(focusSnapshot.itemIndex)
@@ -1088,7 +1105,7 @@ fun HomeScreen(
             contentStartPadding = contentStartPadding,
             fastScrollThresholdMs = fastScrollThresholdMs,
             usePosterCards = usePosterCards,
-            isContextMenuOpen = showContextMenu,
+            isContextMenuOpen = showContextMenu || showLiveTvContextMenu,
             trailerIsPlaying = isTrailerPlaying,
             onTrailerStop = { trailerSuppressed = true },
             isMobile = isMobile,
@@ -1136,7 +1153,15 @@ fun HomeScreen(
                 contextMenuIsContinueWatching = isContinue
                 showContextMenu = true
             },
+            onOpenLiveTvContextMenu = { channelId, streamUrl, channelName ->
+                liveTvContextChannelId = channelId
+                liveTvContextStreamUrl = streamUrl
+                liveTvContextChannelName = channelName
+                showLiveTvContextMenu = true
+            },
             onInterceptBack = onInterceptBack,
+            liveChannelEpg = uiState.liveChannelEpg,
+            onPlayChannelInMiniPlayer = onPlayChannelInMiniPlayer,
         )
         } // end trailer-dim wrapper
 
@@ -1236,6 +1261,33 @@ fun HomeScreen(
             }
         }
 
+
+        // Live TV context menu (long-press on On Now row)
+        if (showLiveTvContextMenu) {
+            Box(modifier = Modifier.fillMaxSize().zIndex(120f)) {
+                LiveTvContextMenu(
+                    isVisible = showLiveTvContextMenu,
+                    channelName = liveTvContextChannelName,
+                    onPlayFullScreen = {
+                        onNavigateToTv(liveTvContextChannelId, liveTvContextStreamUrl)
+                        showLiveTvContextMenu = false
+                        liveTvContextChannelId = null
+                        liveTvContextStreamUrl = null
+                    },
+                    onGuide = {
+                        onNavigateToTv(null, null)
+                        showLiveTvContextMenu = false
+                        liveTvContextChannelId = null
+                        liveTvContextStreamUrl = null
+                    },
+                    onDismiss = {
+                        showLiveTvContextMenu = false
+                        liveTvContextChannelId = null
+                        liveTvContextStreamUrl = null
+                    }
+                )
+            }
+        }
 
         // Toast notification
         uiState.toastMessage?.let { message ->
@@ -2253,7 +2305,10 @@ private fun HomeInputLayer(
     onSwitchProfile: () -> Unit,
     onExitApp: () -> Unit,
     onOpenContextMenu: (MediaItem, Boolean) -> Unit,
+    onOpenLiveTvContextMenu: ((channelId: String, streamUrl: String, channelName: String) -> Unit)? = null,
     onInterceptBack: (() -> Boolean)? = null,
+    liveChannelEpg: Map<Int, com.arflix.tv.data.model.IptvNowNext> = emptyMap(),
+    onPlayChannelInMiniPlayer: ((streamUrl: String, channelId: String, channelName: String, programTitle: String) -> Unit)? = null,
 ) {
     val focusRequester = remember { FocusRequester() }
     var selectPressedInHome by remember { mutableStateOf(false) }
@@ -2507,8 +2562,16 @@ private fun HomeInputLayer(
                                 )
                                 currentItem?.takeIf { isActionableHomeItem(it) }?.let { item ->
                                     val currentCategory = categories.getOrNull(focusState.currentRowIndex)
-                                    val isContinue = currentCategory?.id == "continue_watching"
-                                    onOpenContextMenu(item, isContinue)
+                                    val isOnNowRow = currentCategory?.id == "favorite_tv"
+                                    val iptvId = item.status?.removePrefix("iptv:")
+                                        ?.takeIf { item.status?.startsWith("iptv:") == true && it.isNotBlank() }
+                                    if (isOnNowRow && iptvId != null && onOpenLiveTvContextMenu != null) {
+                                        val streamUrl = getIptvStreamUrl(item.id).orEmpty()
+                                        onOpenLiveTvContextMenu(iptvId, streamUrl, item.title)
+                                    } else {
+                                        val isContinue = currentCategory?.id == "continue_watching"
+                                        onOpenContextMenu(item, isContinue)
+                                    }
                                 }
                             }
                             true
@@ -2525,22 +2588,36 @@ private fun HomeInputLayer(
                                     focusState.currentItemIndex
                                 )
                                 currentItem?.takeIf { isActionableHomeItem(it) }?.let { item ->
+                                    val currentCategory = categories.getOrNull(focusState.currentRowIndex)
+                                    val isOnNowRow = currentCategory?.id == "favorite_tv"
+                                    val iptvId = item.status?.removePrefix("iptv:")
+                                        ?.takeIf { item.status?.startsWith("iptv:") == true && it.isNotBlank() }
                                     if (holdMs >= 500L) {
-                                        // Long-press: open context menu
-                                        val currentCategory = categories.getOrNull(focusState.currentRowIndex)
-                                        val isContinue = currentCategory?.id == "continue_watching"
-                                        onOpenContextMenu(item, isContinue)
+                                        // Long-press: live TV gets its own 2-item menu; everything else gets the regular context menu
+                                        if (isOnNowRow && iptvId != null && onOpenLiveTvContextMenu != null) {
+                                            val streamUrl = getIptvStreamUrl(item.id).orEmpty()
+                                            onOpenLiveTvContextMenu(iptvId, streamUrl, item.title)
+                                        } else {
+                                            val isContinue = currentCategory?.id == "continue_watching"
+                                            onOpenContextMenu(item, isContinue)
+                                        }
                                     } else {
-                                        // Short press: navigate. Must check collection:
-                                        // BEFORE falling through to Details — D-pad SELECT
-                                        // on a service tile (Netflix, HBO, ...) was hitting
-                                        // DetailsScreen with the synthetic hash id and
-                                        // spamming TMDB 404s instead of opening the catalog.
-                                        val iptvId = item.status?.removePrefix("iptv:")
-                                            ?.takeIf { item.status?.startsWith("iptv:") == true && it.isNotBlank() }
+                                        // Short press: On Now row → mini-player; other IPTV → full-screen TV.
+                                        // Must check collection: BEFORE falling through to Details — D-pad SELECT
+                                        // on a service tile (Netflix, HBO, ...) was hitting DetailsScreen with the
+                                        // synthetic hash id and spamming TMDB 404s instead of opening the catalog.
                                         val collectionId = item.status?.removePrefix("collection:")
                                             ?.takeIf { item.status?.startsWith("collection:") == true && it.isNotBlank() }
-                                        if (iptvId != null) {
+                                        if (isOnNowRow && iptvId != null) {
+                                            val streamUrl = getIptvStreamUrl(item.id).orEmpty()
+                                            if (streamUrl.isNotBlank() && onPlayChannelInMiniPlayer != null) {
+                                                val programTitle = liveChannelEpg[item.id]?.now?.title.orEmpty()
+                                                onPlayChannelInMiniPlayer(streamUrl, iptvId, item.title, programTitle)
+                                            } else {
+                                                // Stream URL not ready yet — fall back to TV guide
+                                                onNavigateToTv(iptvId, null)
+                                            }
+                                        } else if (iptvId != null) {
                                             onNavigateToTv(iptvId, getIptvStreamUrl(item.id))
                                         } else if (collectionId != null) {
                                             onNavigateToCollection(collectionId)
@@ -2616,7 +2693,14 @@ private fun HomeInputLayer(
                     onNavigateToDetails(item.mediaType, item.id, item.nextEpisode?.seasonNumber, item.nextEpisode?.episodeNumber)
                 }
             },
-            onItemLongClick = if (isMobile) { item, isContinue -> onOpenContextMenu(item, isContinue) } else null
+            onItemLongClick = if (isMobile) { item, isContinue -> onOpenContextMenu(item, isContinue) } else null,
+            getLiveChannelEpg = { id -> liveChannelEpg[id] },
+            getLiveChannelStreamUrl = getIptvStreamUrl,
+            onLiveTvChannelClick = onPlayChannelInMiniPlayer?.let { play ->
+                { streamUrl, channelId, channelName, programTitle ->
+                    play(streamUrl, channelId, channelName, programTitle)
+                }
+            },
         )
     }
 }
@@ -2638,7 +2722,10 @@ private fun HomeRowsLayer(
     onDetails: () -> Unit = {},
     onNavigateToDetails: (MediaType, Int, Int?, Int?) -> Unit = { _, _, _, _ -> },
     onItemClick: (MediaItem) -> Unit,
-    onItemLongClick: ((MediaItem, Boolean) -> Unit)? = null
+    onItemLongClick: ((MediaItem, Boolean) -> Unit)? = null,
+    getLiveChannelEpg: (Int) -> com.arflix.tv.data.model.IptvNowNext? = { null },
+    getLiveChannelStreamUrl: (Int) -> String? = { null },
+    onLiveTvChannelClick: ((streamUrl: String, channelId: String, channelName: String, programTitle: String) -> Unit)? = null,
 ) {
     if (isMobile) {
         MobileHomeRowsLayer(
@@ -2660,7 +2747,10 @@ private fun HomeRowsLayer(
             fastScrollThresholdMs = fastScrollThresholdMs,
             usePosterCards = usePosterCards,
             onItemFocusedPrefetch = onItemFocusedPrefetch,
-            onItemClick = onItemClick
+            onItemClick = onItemClick,
+            getLiveChannelEpg = getLiveChannelEpg,
+            getLiveChannelStreamUrl = getLiveChannelStreamUrl,
+            onLiveTvChannelClick = onLiveTvChannelClick,
         )
     }
 }
@@ -2807,7 +2897,10 @@ private fun TvHomeRowsLayer(
     fastScrollThresholdMs: Long,
     usePosterCards: Boolean,
     onItemFocusedPrefetch: (MediaItem) -> Unit = {},
-    onItemClick: (MediaItem) -> Unit
+    onItemClick: (MediaItem) -> Unit,
+    getLiveChannelEpg: (Int) -> com.arflix.tv.data.model.IptvNowNext? = { null },
+    getLiveChannelStreamUrl: (Int) -> String? = { null },
+    onLiveTvChannelClick: ((streamUrl: String, channelId: String, channelName: String, programTitle: String) -> Unit)? = null,
 ) {
     // ── Focus-row stabilizer ──
     // Track the focused row by its category ID (stable) rather than integer
@@ -2978,7 +3071,10 @@ private fun TvHomeRowsLayer(
                                 focusState.currentItemIndex = itemIdx
                                 focusState.isSidebarFocused = false
                                 focusState.lastNavEventTime = SystemClock.elapsedRealtime()
-                            }
+                            },
+                            getLiveChannelEpg = getLiveChannelEpg,
+                            getLiveChannelStreamUrl = getLiveChannelStreamUrl,
+                            onLiveTvChannelClick = onLiveTvChannelClick,
                         )
                     }
                 }
@@ -3245,8 +3341,12 @@ private fun ContentRow(
     isFastScrolling: Boolean,
     useViewportFocusOverlay: Boolean = false,
     onItemClick: (MediaItem) -> Unit,
-    onItemFocused: (MediaItem, Int) -> Unit
+    onItemFocused: (MediaItem, Int) -> Unit,
+    getLiveChannelEpg: (Int) -> com.arflix.tv.data.model.IptvNowNext? = { null },
+    getLiveChannelStreamUrl: (Int) -> String? = { null },
+    onLiveTvChannelClick: ((streamUrl: String, channelId: String, channelName: String, programTitle: String) -> Unit)? = null,
 ) {
+    val isLiveTvRow = category.id == HomeViewModel.FAVORITE_TV_CATEGORY_ID && onLiveTvChannelClick != null
     val isCollectionRow = category.id.startsWith("collection_row_")
     val rowState = rememberLazyListState()
     val density = LocalDensity.current
@@ -3411,6 +3511,30 @@ private fun ContentRow(
                 }
                 val onCardClick = remember(item) {
                     { latestOnItemClick.value(item) }
+                }
+                // ── Live TV / On Now row — dedicated card with EPG, progress, LIVE badge ──
+                if (isLiveTvRow) {
+                    val epg = getLiveChannelEpg(item.id)
+                    val channelId = item.status?.removePrefix("iptv:").orEmpty()
+                    LiveTvChannelCard(
+                        channelName = item.title,
+                        logoUrl = item.image,
+                        nowNext = epg,
+                        isFocused = itemIsFocused,
+                        onClick = {
+                            onCardFocused()
+                            val streamUrl = getLiveChannelStreamUrl(item.id).orEmpty()
+                            if (streamUrl.isNotBlank()) {
+                                onLiveTvChannelClick!!(
+                                    streamUrl,
+                                    channelId,
+                                    item.title,
+                                    epg?.now?.title.orEmpty(),
+                                )
+                            }
+                        },
+                    )
+                    return@itemsIndexed
                 }
                 if (isRanked && index < 10) {
                     // Top 10 rows should use the SAME card sizing as every other row.

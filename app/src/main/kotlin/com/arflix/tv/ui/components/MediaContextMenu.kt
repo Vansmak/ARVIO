@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Visibility
@@ -381,3 +382,96 @@ private data class MenuItem(
     @StringRes val labelRes: Int,
     val action: () -> Unit
 )
+
+/**
+ * Minimal 2-item context menu for live TV cards in the On Now home row.
+ * Shows "Play Full Screen" and "TV Guide" options.
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun LiveTvContextMenu(
+    isVisible: Boolean,
+    channelName: String,
+    onPlayFullScreen: () -> Unit,
+    onGuide: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    var focusedIndex by remember { mutableIntStateOf(0) }
+
+    val menuItems = listOf(
+        MenuItem(icon = Icons.Default.PlayArrow, labelRes = R.string.play_full_screen, action = onPlayFullScreen),
+        MenuItem(icon = Icons.Default.LiveTv, labelRes = R.string.tv_guide, action = onGuide),
+    )
+
+    LaunchedEffect(isVisible) {
+        if (isVisible) {
+            focusedIndex = 0
+            focusRequester.requestFocus()
+        }
+    }
+
+    AnimatedVisibility(
+        visible = isVisible,
+        enter = fadeIn() + scaleIn(initialScale = 0.9f),
+        exit = fadeOut() + scaleOut(targetScale = 0.9f)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(50f)
+                .background(Color.Black.copy(alpha = 0.5f))
+                .focusRequester(focusRequester)
+                .focusable()
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown) {
+                        when (event.key) {
+                            Key.DirectionUp -> { if (focusedIndex > 0) focusedIndex--; true }
+                            Key.DirectionDown -> { if (focusedIndex < menuItems.size - 1) focusedIndex++; true }
+                            Key.Enter, Key.DirectionCenter -> { menuItems[focusedIndex].action(); onDismiss(); true }
+                            Key.Back, Key.Escape -> { onDismiss(); true }
+                            else -> false
+                        }
+                    } else false
+                },
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(top = 110.dp)
+                    .width(320.dp)
+                    .background(BackgroundCard, RoundedCornerShape(14.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = channelName,
+                    style = ArflixTypography.sectionTitle,
+                    color = TextPrimary,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    menuItems.forEachIndexed { index, item ->
+                        ContextMenuItem(
+                            icon = item.icon,
+                            label = stringResource(item.labelRes),
+                            isFocused = index == focusedIndex,
+                            onClick = { item.action(); onDismiss() }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.press_back_to_close),
+                    style = ArflixTypography.caption,
+                    color = TextSecondary.copy(alpha = 0.5f)
+                )
+            }
+        }
+    }
+}

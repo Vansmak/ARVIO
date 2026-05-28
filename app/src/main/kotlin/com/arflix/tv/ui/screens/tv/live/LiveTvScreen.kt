@@ -606,6 +606,16 @@ fun LiveTvScreen(
         }
     }
 
+    // If a channel was started from outside the TV screen (e.g. Home On Now row),
+    // sync the playing channel ID so the guide follows the mini-player's channel.
+    LaunchedEffect(playerViewModel.state.value.channelId) {
+        val vmChannelId = playerViewModel.state.value.channelId ?: return@LaunchedEffect
+        if (vmChannelId != playingChannelId) {
+            playingChannelId = vmChannelId
+            focusedChannelId = vmChannelId
+        }
+    }
+
     BackHandler(enabled = searchOpen) { searchOpen = false }
     BackHandler(enabled = !searchOpen && isFullScreen) { exitFullScreenPlayback() }
     BackHandler(enabled = !searchOpen && !isFullScreen) {

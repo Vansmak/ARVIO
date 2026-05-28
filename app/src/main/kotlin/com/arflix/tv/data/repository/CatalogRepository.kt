@@ -343,7 +343,50 @@ class CatalogRepository @Inject constructor(
         return ensurePreinstalledDefaults(defaultPreinstalled)
     }
 
+    // Migration key — bump the suffix to re-run the cleanup on next launch.
+    private val hiddenMigrationDoneKey = stringPreferencesKey("catalog_hidden_migration_v1")
+
+    /**
+     * One-time migration: remove catalog IDs from the hidden-preinstalled list that ended
+     * up there via old sync data rather than deliberate user action. Runs once per install
+     * (guarded by [hiddenMigrationDoneKey]). After this runs, the user can freely re-hide
+     * those rows via Settings → Catalogs if they want.
+     */
+    private suspend fun migrateHiddenPreinstalledIfNeeded() {
+        val prefs = context.settingsDataStore.data.first()
+        if (prefs[hiddenMigrationDoneKey] == "done") return
+        // "favorite_tv" was added to sync blobs before the On Now row was functional,
+        // so most installs have it hidden from legacy data — not from the user hiding it.
+        val idsToUnhide = setOf("favorite_tv")
+        val profiles = prefs.asMap().keys
+            .mapNotNull { key ->
+                val name = key.name
+                val prefix = "profile_"
+                val suffix = "_hidden_preinstalled_catalogs_v2"
+                if (name.startsWith(prefix) && name.endsWith(suffix)) {
+                    name.removePrefix(prefix).removeSuffix(suffix)
+                } else null
+            }
+            .ifEmpty { listOf("default") }
+        context.settingsDataStore.edit { mutablePrefs ->
+            for (profileId in profiles) {
+                val key = hiddenPreinstalledKey(profileId)
+                val raw = mutablePrefs[key] ?: continue
+                val current = try {
+                    (gson.fromJson<List<String>>(raw, hiddenListType) ?: emptyList())
+                        .map { it.trim() }.filter { it.isNotBlank() }
+                } catch (_: Exception) { continue }
+                val cleaned = current.filterNot { it in idsToUnhide }
+                if (cleaned.size != current.size) {
+                    mutablePrefs[key] = if (cleaned.isEmpty()) "" else gson.toJson(cleaned)
+                }
+            }
+            mutablePrefs[hiddenMigrationDoneKey] = "done"
+        }
+    }
+
     suspend fun ensurePreinstalledDefaults(defaultPreinstalled: List<CatalogConfig>): List<CatalogConfig> {
+        migrateHiddenPreinstalledIfNeeded()
         val profileId = activeProfileId()
         val prefs = context.settingsDataStore.data.first()
         val hidden = decodeHiddenPreinstalled(profileId, prefs)
@@ -389,7 +432,12 @@ class CatalogRepository @Inject constructor(
                     val defaultCfg = defaultMap[config.id] ?: return@mapNotNull null
                     // Preserve user-renamed titles: if the user changed the title
                     // from a previous default, keep their custom title.
-                    if (config.title != defaultCfg.title && config.title.isNotBlank()) {
+                    // Guard: if stored title == catalog ID it was never set by the user
+                    // (old bug stored the ID as the title) — use the bundled default.
+                    val isUserTitle = config.title.isNotBlank() &&
+                        config.title != defaultCfg.title &&
+                        config.title != config.id
+                    if (isUserTitle) {
                         defaultCfg.copy(title = config.title)
                     } else {
                         defaultCfg
@@ -572,7 +620,11 @@ class CatalogRepository @Inject constructor(
 
         val beforeRemovalSize = current.size
         current.removeAll { cfg ->
-            cfg.sourceType == CatalogSourceType.HOME_SERVER && !desiredById.containsKey(cfg.id)
+            // server_resume_* rows are HOME_SERVER type but managed separately by
+            // syncServerResumeCatalogEntries() — don't touch them here.
+            cfg.sourceType == CatalogSourceType.HOME_SERVER &&
+                !cfg.id.startsWith("server_resume_") &&
+                !desiredById.containsKey(cfg.id)
         }
         if (current.size != beforeRemovalSize) changed = true
 
@@ -605,6 +657,58 @@ class CatalogRepository @Inject constructor(
 
         if (changed) saveCatalogs(current)
         return changed
+    }
+
+    /**
+     * Register "Continue on <Server>" resume rows in the saved catalog list so
+     * they appear in Settings → Catalogs and can be reordered or hidden by the user.
+     *
+     * [entries] is a list of (id, title) pairs, e.g.
+     *   ("server_resume_abc123", "Continue on Jellyfin").
+     *
+     * Uses [CatalogSourceType.HOME_SERVER] with a null sourceRef so that:
+     * - [removeCustomCatalog] routes to [hideHomeServerCatalog] (correct hide bucket)
+     * - [loadCatalogItems] returns empty immediately (no network call, null sourceRef)
+     * - The sticky-cache path in loadHomeData provides the actual items from the last
+     *   [launchServerResumeFetch] result.
+     */
+    suspend fun syncServerResumeCatalogEntries(entries: List<Pair<String, String>>) {
+        val profileId = activeProfileId()
+        val hidden = context.settingsDataStore.data.first()
+            .let { prefs -> decodeHiddenHomeServer(profileId, prefs) }
+        // Only register entries the user hasn't explicitly hidden
+        val desiredIds = entries.map { it.first }.filterNot { it in hidden }.toSet()
+
+        val current = getCatalogs().toMutableList()
+        var changed = false
+
+        // Remove stale entries (server disconnected or no longer returning resume data)
+        val before = current.size
+        current.removeAll { it.id.startsWith("server_resume_") && it.id !in desiredIds }
+        if (current.size != before) changed = true
+
+        // Add new entries after the last server_resume row, or after continue_watching
+        val existingIds = current.map { it.id }.toHashSet()
+        val toAdd = entries.filter { (id, _) -> id in desiredIds && id !in existingIds }
+        if (toAdd.isNotEmpty()) {
+            val lastResumeIdx = current.indexOfLast { it.id.startsWith("server_resume_") }
+            val insertIdx = if (lastResumeIdx >= 0) lastResumeIdx + 1 else {
+                val cwIdx = current.indexOfFirst { it.id == "continue_watching" }
+                if (cwIdx >= 0) cwIdx + 1 else 0
+            }
+            toAdd.forEachIndexed { offset, (id, title) ->
+                current.add(insertIdx + offset, CatalogConfig(
+                    id = id,
+                    title = title,
+                    sourceType = CatalogSourceType.HOME_SERVER,
+                    sourceRef = null,
+                    isPreinstalled = false,
+                ))
+            }
+            changed = true
+        }
+
+        if (changed) saveCatalogs(current)
     }
 
     private fun buildAddonCatalogConfig(

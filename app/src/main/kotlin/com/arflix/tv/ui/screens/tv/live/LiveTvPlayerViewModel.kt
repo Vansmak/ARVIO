@@ -90,7 +90,43 @@ class LiveTvPlayerViewModel @Inject constructor(
         ProcessLifecycleOwner.get().lifecycle.addObserver(processLifecycleObserver)
     }
 
-    /** Called by LiveTvScreen when a live channel starts playing. */
+    /**
+     * Start playback of a channel from outside LiveTvScreen (e.g. Home On Now row).
+     * Sets the media item on the ExoPlayer and updates state so the mini-player overlay appears.
+     * When the user navigates back to the TV screen it will detect the channel change
+     * via [state.channelId] and pick up the already-playing stream.
+     */
+    fun playFromHome(
+        channelId: String,
+        streamUrl: String,
+        channelName: String = "",
+        programTitle: String = "",
+    ) {
+        _state.value = MiniPlayerState(
+            isActive = true,
+            channelId = channelId,
+            channelName = channelName,
+            programTitle = programTitle,
+            streamUrl = streamUrl,
+        )
+        // Stop first so the player is in IDLE — prepare() is a no-op when already READY/PLAYING.
+        player.stop()
+        player.clearMediaItems()
+        player.setMediaItem(
+            MediaItem.Builder()
+                .setUri(streamUrl)
+                .setLiveConfiguration(
+                    MediaItem.LiveConfiguration.Builder()
+                        .setMinPlaybackSpeed(1.0f).setMaxPlaybackSpeed(1.0f)
+                        .setTargetOffsetMs(4_000).build()
+                )
+                .build()
+        )
+        player.prepare()
+        player.play()
+    }
+
+    /** Called by LiveTvScreen when a live channel starts playing (screen-driven playback). */
     fun setActiveChannel(
         channelId: String,
         streamUrl: String,

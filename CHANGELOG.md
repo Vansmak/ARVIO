@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.16] - 2026-05-28
+
+### Added
+- **Persistent Live TV mini-player** — stream continues playing in a top-right corner tile when navigating away from the TV guide. Tap tile to return to full-screen guide; Back dismisses.
+- **On Now home row** — favorited IPTV channels appear as a dedicated row on the home screen, showing current program name, progress bar, and time remaining.
+- **Reactive IPTV row builder** — On Now row is built reactively once the IPTV cache is warm (disk or network), not during the initial home load. Survives navigation events and catalog reloads.
+- **Colored channel fallback** — channels without a logo show a deterministic color background (hashed from channel name) with the channel initial, instead of a black card.
+- **On Now card interactions** — single press starts the channel in the mini-player; long press opens a menu with "Play Full Screen" (full TV guide) and "TV Guide" options.
+- **Hero backdrop frozen on On Now row** — browsing the On Now row no longer updates the home screen backdrop.
+
+### Changed
+- **Mini-player fully dismissed on VOD launch** — opening a VOD player stops and clears the IPTV stream entirely. No background audio, no auto-resume when returning from VOD.
+- **Continue on Server rows removed** — "Continue on \<Server\>" home rows removed; library rows sorted by recent cover the same content.
+- **Mini-player channel switch** — switching channels from the On Now row now correctly stops the previous stream before starting the new one.
+
+### Fixed
+- **On Now context menu focus** — long-press menu on On Now cards is now properly focusable and navigable with the TV remote.
+- **On Now card D-pad navigation** — removed system focus from channel cards to prevent conflict with the custom D-pad system (was causing stuck navigation).
+
 ## [2.0.13] - 2026-05-27
 
 ### Added

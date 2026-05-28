@@ -569,10 +569,17 @@ class CloudSyncRepository @Inject constructor(
         }
         root.put("catalogsByProfile", JSONObject(gson.toJson(catalogsByProfile)))
 
-        // Hidden preinstalled catalogs per profile
+        // Hidden preinstalled catalogs per profile.
+        // Dynamic rows that are never user-hidden are excluded so they don't get
+        // re-hidden on the next restore (favorite_tv is managed entirely by IPTV
+        // favorites, not by catalog visibility toggles).
         val hiddenPreinstalledByProfile = buildMap<String, List<String>> {
             profiles.forEach { profile ->
-                put(profile.id, catalogRepository.getHiddenPreinstalledCatalogIdsForProfile(profile.id))
+                put(
+                    profile.id,
+                    catalogRepository.getHiddenPreinstalledCatalogIdsForProfile(profile.id)
+                        .filterNot { it == "favorite_tv" },
+                )
             }
         }
         root.put("hiddenPreinstalledByProfile", JSONObject(gson.toJson(hiddenPreinstalledByProfile)))
@@ -1102,11 +1109,16 @@ class CloudSyncRepository @Inject constructor(
         }
 
         // ── Hidden preinstalled catalogs ──
+        // Never restore "favorite_tv" into the hidden list — it is driven entirely
+        // by IPTV favorites and should never be user-hidden via catalog visibility.
         root.optJSONObject("hiddenPreinstalledByProfile")?.toString()?.takeIf { it.isNotBlank() }?.let { json ->
             val type = object : TypeToken<Map<String, List<String>>>() {}.type
             val map: Map<String, List<String>> = gson.fromJson(json, type) ?: emptyMap()
             map.forEach { (profileId, hidden) ->
-                catalogRepository.setHiddenPreinstalledCatalogIdsForProfile(profileId, hidden)
+                catalogRepository.setHiddenPreinstalledCatalogIdsForProfile(
+                    profileId,
+                    hidden.filterNot { it == "favorite_tv" },
+                )
             }
         }
         root.optJSONArray("hiddenPreinstalledCatalogs")?.toString()?.let { json ->
@@ -1117,7 +1129,10 @@ class CloudSyncRepository @Inject constructor(
                     val type = TypeToken.getParameterized(List::class.java, String::class.java).type
                     gson.fromJson<List<String>>(json, type) ?: emptyList()
                 }
-                catalogRepository.setHiddenPreinstalledCatalogIdsForProfile(activeProfileId, hidden)
+                catalogRepository.setHiddenPreinstalledCatalogIdsForProfile(
+                    activeProfileId,
+                    hidden.filterNot { it == "favorite_tv" },
+                )
             }
         }
 

@@ -666,10 +666,10 @@ fun ArflixApp(
                 && !onPlayerScreen
                 && !onSettingsScreen
 
-            // Pause IPTV audio when a VOD player opens to avoid double audio.
+            // Fully dismiss the mini-player when a VOD player opens — no background stream,
+            // no auto-resume. User can restart the IPTV channel after the VOD finishes.
             LaunchedEffect(onPlayerScreen) {
-                if (onPlayerScreen) liveTvPlayerViewModel.pauseForVod()
-                else if (miniPlayerState.isActive) liveTvPlayerViewModel.resumeIfActive()
+                if (onPlayerScreen) liveTvPlayerViewModel.dismiss()
             }
 
             // Extracted into a standalone composable to avoid ColumnScope.AnimatedVisibility
@@ -743,16 +743,16 @@ private fun LiveTvMiniPlayerLayer(
             enter = fadeIn(tween(200)) + scaleIn(
                 initialScale = 0.8f,
                 animationSpec = tween(200),
-                transformOrigin = TransformOrigin(1f, 0f),
+                transformOrigin = TransformOrigin(1f, 1f),
             ),
             exit = fadeOut(tween(150)) + scaleOut(
                 targetScale = 0.8f,
                 animationSpec = tween(150),
-                transformOrigin = TransformOrigin(1f, 0f),
+                transformOrigin = TransformOrigin(1f, 1f),
             ),
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 8.dp, end = 8.dp),
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 16.dp, end = 16.dp),
         ) {
             LiveTvMiniPlayerOverlay(
                 player = player,
