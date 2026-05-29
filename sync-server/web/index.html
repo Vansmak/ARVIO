@@ -26,7 +26,7 @@
       <button
         class="px-4 py-3 text-sm font-medium transition-colors border-b-2"
         :class="activeTab === tab.id ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-200'"
-        @click="activeTab = tab.id"
+        @click="activeTab = tab.id; if (tab.id === 'history') loadHistory()"
         x-text="tab.label">
       </button>
     </template>

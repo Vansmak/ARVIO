@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.0.20] - 2026-05-29
+
+### Changed
+- **Episeerr: arvio integration simplified** — webhook handler now focuses on playback events and rule processing only; watchlist sync complexity removed (Trakt handles watchlist natively)
+- **Episeerr: Trakt device code auth** — authenticate with Trakt directly from the Episeerr setup page without needing a separate browser OAuth redirect; tokens saved automatically
+- **Episeerr: Trakt dashboard watchlist** — watchlist widget now shows poster cards with status badges and X button (removes from Trakt); matches Plex widget style
+- **Episeerr: Trakt token preservation** — re-saving Trakt settings no longer wipes stored tokens when password fields are left blank
+- **sync-server: history filter** — playback history logs only events at or above the completion threshold (50%); start/low-progress events skipped to reduce noise
+- **sync-server: watchlist posters** — watchlist items now display poster images (posterPath field normalised to image on read)
+- **sync-server: history tab** — history loads on demand when the History tab is opened, not eagerly on page load
+
+## [2.0.18] - 2026-05-28
+
+### Changed
+- **Bidirectional watchlist sync** — on startup, local watchlist is replaced with server state (arvio-server is source of truth); items not present on server are dropped, items missing locally are added
+- **sync-server: TMDB poster fetch** — poster is fetched from TMDB when an item is added without a posterPath
+- **sync-server: media type normalisation** — DELETE endpoint now normalises tv/show/series so removals from Episeerr land correctly
+
+## [2.0.17] - 2026-05-28
+
+### Changed
+- CLAUDE.md updated with On Now row, mini-player, and sync-server architecture documentation
+
 ## [2.0.16] - 2026-05-28
 
 ### Added

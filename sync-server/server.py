@@ -322,9 +322,12 @@ def sync_webhook():
         "durationMs": event.get("durationMs", 0),
         "streamUrl": event.get("streamUrl", ""),
     }
-    history.insert(0, entry)
-    history = history[:500]
-    _save_json(HISTORY_FILE, history)
+    progress_pct = float(event.get("progress_percent") or 0)
+    is_watchlist = entry["event"].startswith("watchlist.")
+    if is_watchlist or progress_pct >= 50:
+        history.insert(0, entry)
+        history = history[:500]
+        _save_json(HISTORY_FILE, history)
 
     # Append inbound event to webhook log
     _append_webhook_log({
@@ -731,7 +734,11 @@ def post_settings():
 
 @app.route("/api/media/watchlist", methods=["GET"])
 def get_watchlist():
-    return jsonify(_load_json(WATCHLIST_FILE, []))
+    items = _load_json(WATCHLIST_FILE, [])
+    for item in items:
+        if not item.get('image') and item.get('posterPath'):
+            item['image'] = item['posterPath']
+    return jsonify(items)
 
 
 @app.route("/api/media/watchlist", methods=["POST"])
