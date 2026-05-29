@@ -225,7 +225,8 @@ class WatchlistRepository @Inject constructor(
     }
 
     /**
-     * Pull watchlist from sync server and merge with local state (additive, no removals).
+     * Pull watchlist from sync server and make local state match server exactly.
+     * Server is the source of truth: items missing from server are removed locally.
      * Call on startup and after profile restore.
      */
     suspend fun syncFromSyncServer() = withContext(Dispatchers.IO) {
@@ -237,8 +238,9 @@ class WatchlistRepository @Inject constructor(
             if (!resp.isSuccessful) return@runCatching
             val body = resp.body?.string() ?: return@runCatching
             val arr = org.json.JSONArray(body)
-            val existing = loadWatchlistRaw().associateBy { "${it.mediaType}:${it.tmdbId}" }
-            val merged = existing.toMutableMap()
+
+            // Build server item map
+            val serverItems = mutableMapOf<String, LocalWatchlistItem>()
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val id = obj.optInt("id").takeIf { it > 0 } ?: continue
@@ -246,18 +248,38 @@ class WatchlistRepository @Inject constructor(
                     when { t.startsWith("tv") || t == "show" || t == "series" -> "tv"; else -> "movie" }
                 }
                 val k = "$mt:$id"
-                if (!merged.containsKey(k)) {
-                    merged[k] = LocalWatchlistItem(
-                        tmdbId = id,
-                        mediaType = mt,
-                        title = obj.optString("title", ""),
-                        posterPath = obj.optString("posterPath", "").takeIf { it.isNotBlank() },
-                        addedAt = obj.optLong("addedAt", System.currentTimeMillis())
-                    )
-                }
+                serverItems[k] = LocalWatchlistItem(
+                    tmdbId = id,
+                    mediaType = mt,
+                    title = obj.optString("title", ""),
+                    posterPath = obj.optString("posterPath", "").takeIf { it.isNotBlank() },
+                    addedAt = obj.optLong("addedAt", System.currentTimeMillis())
+                )
             }
-            saveWatchlist(merged.values.toList())
-            cacheMutex.withLock { itemsCache.clear(); keyCache.clear(); cacheLoaded = false }
+
+            val existing = loadWatchlistRaw().associateBy { "${it.mediaType}:${it.tmdbId}" }
+
+            // Server is source of truth: build result from server items only,
+            // preserving local metadata (poster, backdrop) where available.
+            val result = serverItems.map { (k, serverItem) ->
+                val local = existing[k]
+                if (local != null) local.copy(
+                    posterPath = local.posterPath ?: serverItem.posterPath
+                ) else serverItem
+            }
+
+            saveWatchlist(result)
+            val basicItems = result.map { it.toBasicMediaItem() }
+            cacheMutex.withLock {
+                itemsCache.clear()
+                keyCache.clear()
+                result.forEach { raw ->
+                    val type = if (raw.mediaType == "tv") MediaType.TV else MediaType.MOVIE
+                    keyCache.add(cacheKey(type, raw.tmdbId))
+                }
+                _watchlistItems.value = basicItems
+                cacheLoaded = true
+            }
         }
     }
 

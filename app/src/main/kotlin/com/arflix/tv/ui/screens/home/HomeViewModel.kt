@@ -1147,8 +1147,10 @@ class HomeViewModel @Inject constructor(
                 }
             }
         }
-        // Pre-load watchlist items so the row appears on first home load.
+        // Pre-load watchlist items: sync from server first (server is source of truth),
+        // then enrich with TMDB data so posters appear.
         viewModelScope.launch(Dispatchers.IO) {
+            runCatching { watchlistRepository.syncFromSyncServer() }
             runCatching { watchlistRepository.getWatchlistItems() }
         }
 

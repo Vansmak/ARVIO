@@ -739,8 +739,20 @@ def add_to_watchlist():
     item = request.get_json(force=True) or {}
     if not item.get("id"):
         return jsonify({"error": "missing id"}), 400
+
+    # Fetch poster from TMDB if not provided
+    if not item.get("posterPath") and not item.get("image"):
+        tmdb_id = item.get("id")
+        mt = (item.get("mediaType") or "").lower()
+        path = "/movie/" if mt == "movie" else "/tv/"
+        tmdb_data = _tmdb_get(path + str(tmdb_id))
+        if tmdb_data and tmdb_data.get("poster_path"):
+            item["posterPath"] = "https://image.tmdb.org/t/p/w342" + tmdb_data["poster_path"]
+        if tmdb_data and not item.get("title"):
+            item["title"] = tmdb_data.get("title") or tmdb_data.get("name") or ""
+
     watchlist = _load_json(WATCHLIST_FILE, [])
-    exists = any(w["id"] == item["id"] and w.get("mediaType") == item.get("mediaType") for w in watchlist)
+    exists = any(str(w.get("id")) == str(item["id"]) and w.get("mediaType") == item.get("mediaType") for w in watchlist)
     if not exists:
         item["inWatchlist"] = True
         item["addedAt"] = datetime.utcnow().isoformat() + "Z"
@@ -752,9 +764,17 @@ def add_to_watchlist():
 
 @app.route("/api/media/watchlist/<media_type>/<int:item_id>", methods=["DELETE"])
 def remove_from_watchlist(media_type, item_id):
+    _TV_TYPES = {"tv", "show", "series"}
+
+    def _matches(w):
+        if str(w.get("id")) != str(item_id):
+            return False
+        wmt = w.get("mediaType", "")
+        return wmt == media_type or (media_type in _TV_TYPES and wmt in _TV_TYPES)
+
     watchlist = _load_json(WATCHLIST_FILE, [])
-    removed = [w for w in watchlist if str(w.get("id")) == str(item_id) and w.get("mediaType", "") == media_type]
-    watchlist = [w for w in watchlist if not (str(w.get("id")) == str(item_id) and w.get("mediaType", "") == media_type)]
+    removed = [w for w in watchlist if _matches(w)]
+    watchlist = [w for w in watchlist if not _matches(w)]
     _save_json(WATCHLIST_FILE, watchlist)
     if removed:
         removed[0]["mediaType"] = media_type
