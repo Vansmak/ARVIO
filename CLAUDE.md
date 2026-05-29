@@ -155,51 +155,15 @@ Episeerr is Joe's own Python/Flask media management app. **Two separate director
 File: `episeerr_custom/integrations/arvio.py`, URL prefix `/api/integration/arvio`.
 
 Routes:
-- `POST /webhook` — playback events (start/pause/stop/progress/watchlist.add/watchlist.remove)
-- `GET /watchlist` — watchlist JSON for TV app home row (enriched with Sonarr/Radarr status)
-- `POST /watchlist` — accepts watchlist.add / watchlist.remove webhook payloads (same path, 200 not 405)
-- `GET /watchlist-html` — poster card HTML for Episeerr dashboard widget
-- `GET /status` — connection/sync status
-- `POST /sync` — trigger watchlist sync to Sonarr/Radarr
-- `GET /settings` — load saved Arvio settings blob
-- `PUT /settings` — save Arvio settings blob (full CloudSync JSON)
+- `POST /webhook` — playback events (start/pause/stop/progress); triggers Sonarr rule processing at completion threshold
+- `GET /status` — health check; Arvio pings this to verify Episeerr is reachable
+- `GET /settings` — return full settings blob (used on new-device restore)
+- `PUT /settings` — save full settings blob pushed by TV app
+- `GET/DELETE /history` — playback event log (progress events filtered; only ≥50% threshold events logged)
+- `GET /dashboard/player/state` — current player state snapshot
+- `GET /dashboard/player/events` — SSE stream of player state updates
 
-### Arvio settings blob structure (critical — wrong key = empty watchlist)
-The TV app pushes a settings blob to `PUT /api/integration/arvio/settings`. Key paths:
-
-```
-settings["activeProfileId"]                        → current profile UUID
-settings["watchlistByProfile"][profileId]          → list of watchlist items ← CORRECT KEY
-settings["profileSettingsById"][profileId]         → UI preferences (NOT watchlist)
-settings["iptvByProfile"][profileId]["favoriteChannels"] → list of channel IDs
-```
-
-**Watchlist item fields (camelCase from Kotlin serialization):**
-- `tmdbId` (not `tmdb_id`)
-- `title`
-- `mediaType`: `"movie"` or `"TV"` — normalise to lowercase before Sonarr/Radarr lookup
-- `posterPath`: **full URL** (`https://image.tmdb.org/t/p/w780/...`) — do NOT prepend TMDB base
-- `backdropPath`: full URL
-
-When reading watchlist items, normalise field names:
-```python
-entry["tmdb_id"] = entry.get("tmdbId")
-entry["media_type"] = (entry.get("mediaType") or "").lower()
-entry["image"] = entry.get("posterPath", "")  # already a full URL
-```
-
-### Three-way watchlist sync
-The watchlist exists in three places that must stay in sync:
-
-1. **TV app** (DataStore) — source of truth; pushed to arvio-server settings blob and fires webhooks to Episeerr
-2. **Episeerr** (`episeerr:/app/data/arvio_settings.json`) — receives settings blob from TV app; `watchlistByProfile` is the correct key
-3. **arvio-server** (`/data/watchlist.json`) — receives items via `POST http://arvio-server:7979/api/media/watchlist`
-
-**Webhook flow (TV app → Episeerr):**
-`watchlist.add` → `_sync_single_item()` (Sonarr/Radarr) + `_sync_server_watchlist_add()` (arvio-server)
-`watchlist.remove` → exclusion list + `_sync_server_watchlist_remove()` (arvio-server)
-
-**`_get_sync_server_url()`** reads from `service['url']` in the Episeerr DB (the "Arvio Sync-Server URL" field in Setup). Falls back to legacy `config['sync_server_url']` for backwards compat.
+Watchlist sync was removed from arvio.py in 2.0.20. Trakt handles watchlist natively; arvio.py is webhook-only.
 
 ## arvio-server
 
